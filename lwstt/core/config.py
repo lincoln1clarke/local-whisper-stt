@@ -49,7 +49,8 @@ class ChunkingSection:
 
 @dataclass
 class FeedbackSection:
-    beep_on_arm: bool = True
+    # The red dot is the primary signal; beeps on every dictation get old fast.
+    beep_on_arm: bool = False
     beep_on_commit: bool = False
     beep_on_error: bool = True
     recording_dot: bool = True

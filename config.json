@@ -24,7 +24,7 @@
     "max_chunk_s": 25.0
   },
   "feedback": {
-    "beep_on_arm": true,
+    "beep_on_arm": false,
     "beep_on_commit": false,
     "beep_on_error": true,
     "recording_dot": true

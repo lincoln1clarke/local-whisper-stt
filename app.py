@@ -76,6 +76,9 @@ def send(command: str) -> int:
 def run_supervisor() -> int:
     guard = SingleInstance()
     if not guard.acquire():
+        # Logged, not just printed: under pythonw there is no stdout to see it
+        # on, and a silently refused launch is indistinguishable from a crash.
+        write_log("refused to start: another instance already holds the mutex")
         print("already running -- use --status, --reload or --quit")
         return 1
 

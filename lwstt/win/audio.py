@@ -50,7 +50,11 @@ class WAVEHDR(ctypes.Structure):
 
 
 WAVEHDR._fields_ = [
-    ("lpData", ctypes.c_char_p),
+    # POINTER(c_char), never c_char_p. ctypes auto-converts a c_char_p struct
+    # field to a Python bytes object on attribute access and truncates it at
+    # the first NUL -- and PCM audio is full of NULs. Reading the buffer back
+    # through such a field yields arbitrary heap memory rather than audio.
+    ("lpData", ctypes.POINTER(ctypes.c_char)),
     ("dwBufferLength", wintypes.DWORD),
     ("dwBytesRecorded", wintypes.DWORD),
     ("dwUser", DWORD_PTR),
@@ -160,7 +164,7 @@ class Recorder:
         for _ in range(self.buffer_count):
             block = ctypes.create_string_buffer(self.bytes_per_buffer)
             header = WAVEHDR(
-                lpData=ctypes.cast(block, ctypes.c_char_p),
+                lpData=ctypes.cast(block, ctypes.POINTER(ctypes.c_char)),
                 dwBufferLength=self.bytes_per_buffer,
                 dwFlags=0,
             )
@@ -180,22 +184,39 @@ class Recorder:
         self._thread.start()
         _check(winmm.waveInStart(self._handle), "waveInStart")
 
+    def drain_ready(self, requeue: bool = True) -> int:
+        """Move every completed buffer into the queue. Returns bytes taken.
+
+        Split out from the harvest thread so the buffer-read path is testable
+        without a microphone -- this is where a NUL-truncating pointer read
+        silently substituted heap garbage for audio.
+        """
+        taken = 0
+        for header, block in zip(self._headers, self._blocks):
+            if not header.dwFlags & WHDR_DONE:
+                continue
+            n = header.dwBytesRecorded
+            if n:
+                # Read from the Python buffer we own rather than back through
+                # header.lpData: same memory, no pointer games, and .raw keeps
+                # every NUL byte intact.
+                self._queue.put(block.raw[:n])
+                self._bytes_recorded += n
+                taken += n
+            header.dwFlags &= ~WHDR_DONE
+            header.dwBytesRecorded = 0
+            if requeue:
+                winmm.waveInAddBuffer(
+                    self._handle, ctypes.byref(header), ctypes.sizeof(header)
+                )
+        return taken
+
     def _harvest(self) -> None:
         while self._running.is_set():
             kernel32.WaitForSingleObject(self._event, 50)
-            for header in self._headers:
-                if not self._running.is_set():
-                    return
-                if header.dwFlags & WHDR_DONE:
-                    n = header.dwBytesRecorded
-                    if n:
-                        self._queue.put(ctypes.string_at(header.lpData, n))
-                        self._bytes_recorded += n
-                    header.dwFlags &= ~WHDR_DONE
-                    header.dwBytesRecorded = 0
-                    winmm.waveInAddBuffer(
-                        self._handle, ctypes.byref(header), ctypes.sizeof(header)
-                    )
+            if not self._running.is_set():
+                return
+            self.drain_ready()
 
     def stop(self) -> None:
         if not self._running.is_set():
