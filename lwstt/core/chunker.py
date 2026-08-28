@@ -71,6 +71,15 @@ def decide(
             return Decision(Action.DROP)
         return Decision(Action.CONTINUE)
 
+    # An internal gap that is already in the buffer is just as valid a boundary
+    # as a trailing one, and closing at the earliest complete phrase keeps
+    # chunks small. This matters whenever audio arrives faster than it is
+    # processed -- most often when the GPU is busy with a rolling final and the
+    # buffer grows straight through a pause.
+    for earlier, later in zip(speech, speech[1:]):
+        if later.start - earlier.end + _EPS >= silence_gap_s:
+            return Decision(Action.CLOSE, cut_at=earlier.end)
+
     last_end = speech[-1].end
     trailing_silence = buffer_s - last_end
 

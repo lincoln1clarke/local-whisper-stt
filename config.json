@@ -1,0 +1,72 @@
+{
+  "hotkey": {
+    "keys": [
+      "right_ctrl",
+      "right_alt"
+    ],
+    "hold_threshold_ms": 500
+  },
+  "audio": {
+    "input_device": null,
+    "sample_rate": 16000,
+    "open_on_keydown": true
+  },
+  "models": {
+    "dir": "~/ai-models",
+    "preview": "faster-whisper-large-v3-turbo",
+    "final_ac": "faster-whisper-large-v3",
+    "final_battery": "faster-whisper-large-v3",
+    "device": "cuda",
+    "compute_type": "float16"
+  },
+  "chunking": {
+    "silence_gap_ms": 800,
+    "max_chunk_s": 25.0
+  },
+  "feedback": {
+    "beep_on_arm": true,
+    "beep_on_commit": false,
+    "beep_on_error": true,
+    "recording_dot": true
+  },
+  "preview": {
+    "enabled": true,
+    "refresh_ms": 400,
+    "beam_size": 1
+  },
+  "final": {
+    "beam_size": 5,
+    "condition_on_previous_text": false,
+    "vad_filter": true,
+    "language": "en"
+  },
+  "vocabulary": {
+    "file": "vocabulary.md",
+    "mode": "hotwords",
+    "max_tokens": 224
+  },
+  "filler": {
+    "file": "filler.md",
+    "enabled": true
+  },
+  "runtime": {
+    "preload_on_start": false,
+    "max_dictation_minutes": 60,
+    "idle_unload_minutes_ac": 15,
+    "idle_unload_minutes_battery": 15,
+    "idle_exit_minutes_ac": 15,
+    "idle_exit_minutes_battery": 15
+  },
+  "output": {
+    "marker_open": "~",
+    "marker_close": "~",
+    "normalize_newlines_to_space": true
+  },
+  "logging": {
+    "enabled": true,
+    "dir": "logs",
+    "format": "opus",
+    "encoder": "ffmpeg",
+    "bitrate_kbps": 24
+  }
+}

@@ -48,9 +48,41 @@ class TestSilenceGap:
     def test_gap_exactly_at_the_threshold_closes(self):
         assert d([Speech(0.0, 2.0)], buffer_s=2.0 + GAP).action is Action.CLOSE
 
-    def test_cut_uses_the_last_segment_of_several(self):
+    def test_cut_uses_the_last_segment_when_no_internal_gap_is_long_enough(self):
         speech = [Speech(0.0, 1.0), Speech(1.5, 2.5), Speech(3.0, 4.0)]
         assert d(speech, buffer_s=5.0).cut_at == 4.0
+
+
+class TestInternalGaps:
+    """A gap already sitting in the buffer is as good a boundary as a trailing
+    one. This is what keeps chunking correct when audio arrives faster than it
+    is processed -- notably while the GPU is busy with a rolling final."""
+
+    def test_internal_gap_closes_at_the_phrase_before_it(self):
+        speech = [Speech(0.0, 2.0), Speech(3.5, 5.0)]
+        result = d(speech, buffer_s=5.1)
+        assert result.action is Action.CLOSE
+        assert result.cut_at == 2.0
+
+    def test_earliest_qualifying_gap_wins(self):
+        speech = [Speech(0.0, 1.0), Speech(2.5, 3.0), Speech(4.5, 5.0)]
+        assert d(speech, buffer_s=5.1).cut_at == 1.0
+
+    def test_short_internal_gaps_are_ignored(self):
+        speech = [Speech(0.0, 1.0), Speech(1.3, 2.0)]
+        assert d(speech, buffer_s=2.1).action is Action.CONTINUE
+
+    def test_internal_gap_is_found_even_when_still_speaking(self):
+        speech = [Speech(0.0, 2.0), Speech(3.5, 6.0)]
+        assert d(speech, buffer_s=6.0).cut_at == 2.0
+
+    def test_result_is_independent_of_how_fast_audio_arrived(self):
+        """The bug this fixes: buffering the whole utterance before processing
+        must give the same boundary as streaming it in real time."""
+        speech = [Speech(0.0, 1.65), Speech(3.28, 5.46)]
+        all_at_once = d(speech, buffer_s=5.8)
+        streamed = d([Speech(0.0, 1.65)], buffer_s=3.0)
+        assert all_at_once.cut_at == streamed.cut_at == 1.65
 
     def test_trailing_silence_is_trimmed_off_the_chunk(self):
         """The cut is at the end of speech, not the end of the buffer -- the
