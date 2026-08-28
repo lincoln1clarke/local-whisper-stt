@@ -411,3 +411,64 @@ class TestFlashReduction:
         sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "The car sat."})
         assert sup.typed != []
         assert "The car sat." in sup.typing.on_screen()
+
+
+class TestTransientFocusLoss:
+    """Windows reports no foreground window at all during app switching, while
+    a menu opens, or as one window is torn down before the next is raised.
+
+    Treating that blink as a focus change aborts a dictation the user is still
+    speaking -- and since they are still holding the keys, the rest of the press
+    goes nowhere and is discarded on release. Observed in the wild as "it stops
+    working after I switch apps".
+    """
+
+    def test_a_null_foreground_window_does_not_abort(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 0)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
+        assert sup.dictating, "a transient loss of foreground must not abort"
+
+    def test_typing_resumes_when_focus_returns(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        sup._arm()
+        sup.dictating = True
+        monkeypatch.setattr(module, "foreground_window", lambda: 0)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "during"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 12345)
+        sup.typed.clear()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "during the blink"})
+        assert sup.typed != []
+        assert sup.dictating
+
+    def test_a_real_different_window_still_aborts(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 99999)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
+        assert not sup.dictating, "a genuine focus change must still abort"
+
+    def test_release_after_an_abort_is_reported_as_such(self, sup):
+        messages = []
+        sup.log = messages.append
+        sup._arm()
+        sup.dictating = True
+        sup.abort(reason="focus changed")
+        sup._disarm()
+        assert any("after an abort" in m for m in messages)
+        assert not any("discarded a" in m for m in messages)
+
+    def test_a_genuine_stray_tap_is_still_reported_as_discarded(self, sup):
+        messages = []
+        sup.log = messages.append
+        sup._arm()
+        sup._disarm()
+        assert any("discarded a" in m for m in messages)

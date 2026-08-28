@@ -25,7 +25,11 @@ from pathlib import Path
 
 from ..core.chunker import Action, decide
 from ..core.protocol import FrameReader, Msg, decode_json, encode, encode_json
-from ..core.textproc import normalize_newlines, strip_fillers
+from ..core.textproc import (
+    capitalize_standalone_i,
+    normalize_newlines,
+    strip_fillers,
+)
 from ..core.wordlists import build_prompt, fit_to_budget, load_list
 from . import asr, audio_log
 
@@ -157,6 +161,8 @@ class Worker:
     def clean(self, text: str) -> str:
         text = normalize_newlines(text)
         text = strip_fillers(text, self.fillers())
+        if self.settings.get("output", {}).get("capitalize_standalone_i", True):
+            text = capitalize_standalone_i(text)
         return text.strip()
 
     def run_preview(self) -> None:

@@ -8,6 +8,7 @@ from hypothesis import strategies as st
 
 from lwstt.core.textproc import (
     append_chunk,
+    capitalize_standalone_i,
     build_filler_pattern,
     join_chunks,
     normalize_newlines,
@@ -164,3 +165,46 @@ class TestAppendChunk:
         for part in parts:
             accumulated = append_chunk(accumulated, part)
         assert accumulated == join_chunks(parts)
+
+
+class TestCapitalizeStandaloneI:
+    def test_capitalises_a_lone_i(self):
+        assert capitalize_standalone_i("i think i am right") == "I think I am right"
+
+    def test_handles_contractions(self):
+        assert capitalize_standalone_i("i'm here and i'll wait") == "I'm here and I'll wait"
+
+    def test_leaves_letters_inside_words_alone(self):
+        for text in ("hi there", "wi-fi is fine", "the ninth item", "big"):
+            assert capitalize_standalone_i(text) == text
+
+    def test_leaves_ie_alone(self):
+        assert capitalize_standalone_i("that is i.e. an example") == "that is i.e. an example"
+
+    def test_already_capital_is_untouched(self):
+        assert capitalize_standalone_i("I am fine") == "I am fine"
+
+    def test_start_and_end_of_string(self):
+        assert capitalize_standalone_i("i") == "I"
+        assert capitalize_standalone_i("so am i") == "so am I"
+
+    def test_adjacent_punctuation(self):
+        assert capitalize_standalone_i("yes, i said (i did).") == "yes, I said (I did)."
+
+    def test_the_imaginary_unit_is_the_accepted_casualty(self):
+        """Documented trade: a bare mathematical i is capitalised too."""
+        assert capitalize_standalone_i("the value of i") == "the value of I"
+
+    def test_empty(self):
+        assert capitalize_standalone_i("") == ""
+
+    @given(st.text(max_size=80))
+    def test_never_changes_length(self, text):
+        assert len(capitalize_standalone_i(text)) == len(text)
+
+    @given(st.text(max_size=80))
+    def test_only_ever_changes_the_letter_i(self, text):
+        result = capitalize_standalone_i(text)
+        for before, after in zip(text, result):
+            if before != after:
+                assert before == "i" and after == "I"

@@ -101,8 +101,10 @@ class TestForcedCut:
     def test_talking_past_the_window_forces_a_cut(self):
         result = d([Speech(0.0, 24.9)], buffer_s=25.0)
         assert result.action is Action.CLOSE
-        assert result.cut_at == MAX
         assert result.forced
+        # 24.9, not 25.0: a speech boundary that fits is preferred to the raw
+        # limit, so the cut does not land mid-word. See TestForcedCutPlacement.
+        assert result.cut_at == 24.9
 
     def test_silence_gap_wins_over_the_forced_cut(self):
         """A natural boundary is always preferred, even at the limit."""
@@ -169,3 +171,34 @@ class TestEdgeCases:
         result = d([Speech(1.0, 1.0)], buffer_s=3.0)
         assert result.action is Action.CLOSE
         assert result.cut_at == 1.0
+
+
+class TestForcedCutPlacement:
+    """A forced cut should still land on a speech boundary where one exists.
+
+    Slicing a word in half loses it, and short function words at a seam are
+    exactly what goes missing.
+    """
+
+    def test_prefers_the_last_boundary_that_fits(self):
+        speech = [Speech(0.0, 4.0), Speech(4.3, 9.0), Speech(9.2, 13.0)]
+        result = d(speech, buffer_s=13.0, max_chunk=12.0)
+        assert result.forced
+        assert result.cut_at == 9.0, "should cut at a pause, not at the limit"
+
+    def test_falls_back_to_the_limit_with_no_boundary(self):
+        speech = [Speech(0.0, 20.0)]
+        result = d(speech, buffer_s=20.0, max_chunk=12.0)
+        assert result.forced
+        assert result.cut_at == 12.0
+
+    def test_never_cuts_beyond_the_limit(self):
+        speech = [Speech(0.0, 4.0), Speech(4.3, 30.0)]
+        result = d(speech, buffer_s=30.0, max_chunk=12.0)
+        assert result.cut_at <= 12.0
+
+    def test_a_real_gap_still_wins_over_a_forced_cut(self):
+        speech = [Speech(0.0, 5.0), Speech(7.0, 13.0)]
+        result = d(speech, buffer_s=13.0, max_chunk=12.0)
+        assert not result.forced
+        assert result.cut_at == 5.0

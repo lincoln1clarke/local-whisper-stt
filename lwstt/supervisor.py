@@ -63,6 +63,7 @@ class Supervisor:
         self.armed_at = 0.0
         self.session = 0
         self._last_revision = 0.0
+        self._aborted_this_press = False
         self.target_hwnd = 0
         self.threshold_passed = False
         self.dictating = False
@@ -113,6 +114,9 @@ class Supervisor:
                 "file": str(self.config_dir / c.filler.file),
                 "enabled": c.filler.enabled,
             },
+            "output": {
+                "capitalize_standalone_i": c.output.capitalize_standalone_i,
+            },
             "logging": {
                 "enabled": c.logging.enabled,
                 "dir": str(self.config_dir / c.logging.dir),
@@ -124,13 +128,26 @@ class Supervisor:
     # -- typing ----------------------------------------------------------
 
     def _focus_intact(self) -> bool:
-        """Never backspace into a document the earlier characters never entered."""
+        """Never backspace into a document the earlier characters never entered.
+
+        A *transient* loss of foreground is not a focus change. Windows reports
+        no foreground window at all during app switching, while a menu opens, or
+        as one window is torn down before the next is raised. Treating that
+        blink as a real change aborts a dictation the user is still speaking --
+        and because they are still holding the keys, the rest of the press then
+        goes nowhere and the whole thing is discarded on release. That is the
+        "it just stops working after I switch apps" failure.
+        """
         current = foreground_window()
         if current == self.target_hwnd:
             return True
+        if current == 0:
+            # No foreground window right now. Nothing to type into and nothing
+            # to be confused about; wait for it to come back.
+            return True
         self.log(
-            f"focus changed ({window_title(self.target_hwnd)!r} -> "
-            f"{window_title(current)!r}); aborting"
+            f"focus changed ({window_title(self.target_hwnd)!r} [{self.target_hwnd}]"
+            f" -> {window_title(current)!r} [{current}]); aborting"
         )
         return False
 
@@ -288,6 +305,7 @@ class Supervisor:
         with self._lock:
             self.armed_at = time.monotonic()
             self.session += 1
+            self._aborted_this_press = False
             # Measured from arming, so the very first reword is rate-limited
             # like any other rather than passing for free.
             self._last_revision = time.monotonic()
@@ -325,8 +343,11 @@ class Supervisor:
             held = time.monotonic() - self.armed_at
             tail = self._stop_recording()
             if not self.threshold_passed:
-                # A stray tap. Nothing was typed, so nothing to undo.
-                self.log(f"discarded a {held * 1000:.0f} ms press")
+                if self._aborted_this_press:
+                    self.log(f"press ended {held * 1000:.0f} ms after an abort")
+                else:
+                    # A stray tap. Nothing was typed, so nothing to undo.
+                    self.log(f"discarded a {held * 1000:.0f} ms press")
                 return
             if tail:
                 self.worker.send_audio(tail)
@@ -347,6 +368,7 @@ class Supervisor:
                 self.worker.abort()
             self.dictating = False
             self.threshold_passed = False
+            self._aborted_this_press = True
             if reason:
                 self.log(f"aborted: {reason}")
             if self.config.feedback.beep_on_error:

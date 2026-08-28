@@ -17,6 +17,10 @@ _SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?])")
 _DOUBLED_COMMA = re.compile(r",(?:\s*,)+")
 _COMMA_BEFORE_TERMINAL = re.compile(r",\s*([.!?])")
 _LEADING_JUNK = re.compile(r"^[\s,;:]+")
+# A lone lowercase "i". The lookbehind excludes it mid-word ("hi", "wi-fi") and
+# the apostrophe is deliberately allowed on the right so "i'm" -> "I'm". "i.e."
+# is carved out; the imaginary unit is the accepted casualty.
+_STANDALONE_I = re.compile(r"(?<![A-Za-z0-9'])i(?!\.e\.)(?![A-Za-z0-9])")
 
 
 def normalize_newlines(text: str) -> str:
@@ -82,3 +86,14 @@ def append_chunk(existing: str, addition: str) -> str:
     if existing.endswith((" ", "\t")):
         return existing + addition
     return existing + " " + addition
+
+
+def capitalize_standalone_i(text: str) -> str:
+    """Capitalise a lone "i".
+
+    Whisper drops the capital often enough to be worth a deterministic fix, and
+    unlike anything a model would do this is entirely predictable: it changes
+    exactly one character, only where the word is a bare "i", and never touches
+    a letter inside another word.
+    """
+    return _STANDALONE_I.sub("I", text)

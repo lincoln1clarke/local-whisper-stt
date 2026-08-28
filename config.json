@@ -44,7 +44,7 @@
     "file": "vocabulary.md",
     "mode": "hotwords",
     "max_tokens": 224,
-    "apply_to_preview": false
+    "apply_to_preview": true
   },
   "filler": {
     "file": "filler.md",
@@ -64,7 +64,8 @@
     "normalize_newlines_to_space": true,
     "leading_space": true,
     "min_revision_interval_ms": 1200,
-    "show_listening_markers": true
+    "show_listening_markers": true,
+    "capitalize_standalone_i": true
   },
   "logging": {
     "enabled": true,

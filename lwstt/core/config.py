@@ -83,7 +83,7 @@ class VocabularySection:
     # tokens straight into its output -- worst under the greedy decoding the
     # preview uses. Bias the final pass, where beam search resists it and the
     # result is what the user keeps.
-    apply_to_preview: bool = False
+    apply_to_preview: bool = True
 
 
 @dataclass
@@ -113,6 +113,8 @@ class OutputSection:
     # Empty markers as soon as the hold threshold passes: confirms it is
     # listening, and confirms the caret is somewhere that accepts text.
     show_listening_markers: bool = True
+    # Whisper drops the capital on a lone "i" often enough to be worth fixing.
+    capitalize_standalone_i: bool = True
     # Greedy decoding rewrites its own tail constantly; each rewrite is a
     # visible delete-and-retype. Appends are free and always applied.
     min_revision_interval_ms: int = 1200

@@ -88,8 +88,15 @@ def decide(
         return Decision(Action.CLOSE, cut_at=last_end)
 
     if buffer_s + _EPS >= max_chunk_s:
-        # Talked straight through the window. Cutting here can split a word;
-        # rare, and it costs one word rather than the whole dictation.
+        # Talked straight through the window and must cut anyway. Prefer the
+        # last speech boundary that fits: Silero splits on pauses far shorter
+        # than silence_gap_s, so there is usually one within a word or two of
+        # the limit. Cutting there instead of at an arbitrary timestamp avoids
+        # slicing a word in half and losing it -- short function words at a
+        # seam are exactly what goes missing.
+        boundaries = [s.end for s in speech if s.end + _EPS <= max_chunk_s]
+        if boundaries:
+            return Decision(Action.CLOSE, cut_at=boundaries[-1], forced=True)
         return Decision(Action.CLOSE, cut_at=max_chunk_s, forced=True)
 
     if ended:
