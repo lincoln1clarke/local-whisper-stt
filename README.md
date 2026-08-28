@@ -7,10 +7,11 @@ See [PLAN.md](PLAN.md) for the design and the reasoning behind every decision.
 
 ## Using it
 
-Hold both keys and talk. Provisional text appears wrapped in `~tildes~` and is
-replaced by the final transcription as each phrase completes. A red dot appears
-beside the notification area while recording, and there is a short beep when it
-starts listening.
+Hold both keys and talk. An empty `~~` appears as soon as the hold threshold
+passes -- that is the confirmation it is listening, and also confirmation the
+caret is somewhere that accepts text. Provisional text fills in between the
+tildes and is replaced by the final transcription as each phrase completes. A
+red dot shows beside the notification area while recording.
 
 - **Release** either key to finish.
 - **Escape** while holding aborts and removes the provisional text.
@@ -44,8 +45,14 @@ Three files, edited directly. No settings window.
 | File | Purpose |
 |---|---|
 | `config.json` | everything |
-| `vocabulary.md` | terms to bias towards, **in priority order** |
+| `vocabulary.md` | terms to bias towards, **in priority order** (ships empty) |
 | `filler.md` | words to strip from the final text |
+
+`vocabulary.md` ships **empty on purpose**. Hotwords are decoder context, and
+Whisper will sometimes emit them straight into its output when the audio is
+ambiguous -- so a term listed here can appear in your text even when you did not
+say it. Only add words that are genuinely misrecognised often enough to be worth
+that. The preview pass ignores the list entirely; only the final pass is biased.
 
 The word lists are markdown bullet lists: lines starting with `-` are entries,
 everything else is commentary. They are re-read at the start of **every**

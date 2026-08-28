@@ -134,6 +134,18 @@ class Worker:
         )
         return build_prompt(kept)
 
+    def preview_hotwords(self) -> str | None:
+        """Vocabulary bias for the preview pass -- off by default.
+
+        Whisper emits initial-prompt tokens into its output often enough to
+        matter, and greedy decoding on a partial phrase is where it happens
+        most. The words appear, then the final pass replaces them; harmless but
+        alarming to watch. The final pass keeps the bias.
+        """
+        if not self.settings.get("vocabulary", {}).get("apply_to_preview", False):
+            return None
+        return self.settings.get("_hotwords") or None
+
     def fillers(self) -> list[str]:
         cfg = self.settings.get("filler", {})
         if not cfg.get("enabled", True):
@@ -167,7 +179,7 @@ class Worker:
                 audio,
                 language=self.settings.get("language", "en"),
                 beam_size=preview_cfg.get("beam_size", 1),
-                hotwords=self.settings.get("_hotwords"),
+                hotwords=self.preview_hotwords(),
                 vad_filter=False,  # already gated above; avoids double work
             )
         except Exception as exc:

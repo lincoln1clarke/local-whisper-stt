@@ -79,6 +79,11 @@ class VocabularySection:
     file: str = "vocabulary.md"
     mode: str = "hotwords"
     max_tokens: int = 224
+    # Hotwords are decoder context, and Whisper will sometimes emit prompt
+    # tokens straight into its output -- worst under the greedy decoding the
+    # preview uses. Bias the final pass, where beam search resists it and the
+    # result is what the user keeps.
+    apply_to_preview: bool = False
 
 
 @dataclass
@@ -105,6 +110,9 @@ class OutputSection:
     # Dictation usually starts where a caret already sits at the end of a word,
     # and the target cannot be read to find out.
     leading_space: bool = True
+    # Empty markers as soon as the hold threshold passes: confirms it is
+    # listening, and confirms the caret is somewhere that accepts text.
+    show_listening_markers: bool = True
     # Greedy decoding rewrites its own tail constantly; each rewrite is a
     # visible delete-and-retype. Appends are free and always applied.
     min_revision_interval_ms: int = 1200

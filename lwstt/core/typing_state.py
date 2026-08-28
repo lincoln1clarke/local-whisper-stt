@@ -28,13 +28,18 @@ class TypingState:
         self.leading_space = leading_space
         self.committed = ""
         self.provisional = ""
+        self.listening = False
 
     # -- introspection ---------------------------------------------------
 
     def wrapped_provisional(self) -> str:
-        if not self.provisional:
-            return ""
-        return f"{self.marker_open}{self.provisional}{self.marker_close}"
+        if self.provisional:
+            return f"{self.marker_open}{self.provisional}{self.marker_close}"
+        if self.listening:
+            # Empty markers: proof it is listening, and proof the caret is
+            # somewhere that accepts text, without waiting for a transcription.
+            return f"{self.marker_open}{self.marker_close}"
+        return ""
 
     def on_screen(self) -> str:
         """Everything this program has typed and not removed.
@@ -44,10 +49,20 @@ class TypingState:
         usually starts where a caret already sits at the end of a word, and
         there is no way to read the target to find out.
         """
-        body = self.committed + self.wrapped_provisional()
-        if not body:
+        parts = [p for p in (self.committed, self.wrapped_provisional()) if p]
+        if not parts:
             return ""
-        return (" " if self.leading_space else "") + body
+        # A space between committed text and the live preview, so a growing
+        # phrase does not run into the sentence already finalised before it.
+        return (" " if self.leading_space else "") + " ".join(parts)
+
+    def set_listening(self, listening: bool) -> Edit:
+        """Show or hide the empty marker pair."""
+
+        def mutate() -> None:
+            self.listening = listening
+
+        return self._transition(mutate)
 
     def preview_edit(self, text: str) -> Edit:
         """What set_provisional(text) would emit, without changing anything.
@@ -60,6 +75,9 @@ class TypingState:
         after = self.on_screen()
         self.provisional = saved
         return diff_edit(before, after)
+
+    # ``listening`` stays set across commits: a finalised chunk mid-dictation
+    # still leaves the markers showing, because it is still listening.
 
     # -- transitions -----------------------------------------------------
 
@@ -94,6 +112,7 @@ class TypingState:
 
         def mutate() -> None:
             self.provisional = ""
+            self.listening = False
 
         return self._transition(mutate)
 
@@ -107,6 +126,7 @@ class TypingState:
         def mutate() -> None:
             self.committed = ""
             self.provisional = ""
+            self.listening = False
 
         return self._transition(mutate)
 
@@ -114,3 +134,4 @@ class TypingState:
         """Forget all state without emitting an edit (start of a new dictation)."""
         self.committed = ""
         self.provisional = ""
+        self.listening = False

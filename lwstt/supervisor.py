@@ -107,6 +107,7 @@ class Supervisor:
                 "file": str(self.config_dir / c.vocabulary.file),
                 "max_tokens": c.vocabulary.max_tokens,
                 "mode": c.vocabulary.mode,
+                "apply_to_preview": c.vocabulary.apply_to_preview,
             },
             "filler": {
                 "file": str(self.config_dir / c.filler.file),
@@ -176,6 +177,9 @@ class Supervisor:
                 else:
                     self._apply(self.typing.abort())
             elif msg is Msg.DONE:
+                # Drop the listening markers explicitly: reset() emits no edit,
+                # so they would otherwise be left behind on screen.
+                self._apply(self.typing.set_listening(False))
                 self.dictating = False
                 self.typing.reset()
             elif msg is Msg.ERROR:
@@ -365,6 +369,8 @@ class Supervisor:
                 self.threshold_passed = True
                 self.dictating = True
                 self.worker.start_dictation(self.worker_settings())
+                if self.config.output.show_listening_markers:
+                    self._apply(self.typing.set_listening(True))
             data = recorder.read_available()
             if data:
                 self.worker.send_audio(data)

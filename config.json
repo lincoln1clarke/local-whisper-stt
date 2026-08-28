@@ -43,7 +43,8 @@
   "vocabulary": {
     "file": "vocabulary.md",
     "mode": "hotwords",
-    "max_tokens": 224
+    "max_tokens": 224,
+    "apply_to_preview": false
   },
   "filler": {
     "file": "filler.md",
@@ -62,7 +63,8 @@
     "marker_close": "~",
     "normalize_newlines_to_space": true,
     "leading_space": true,
-    "min_revision_interval_ms": 1200
+    "min_revision_interval_ms": 1200,
+    "show_listening_markers": true
   },
   "logging": {
     "enabled": true,

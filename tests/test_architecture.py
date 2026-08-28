@@ -140,9 +140,20 @@ class TestPackagedDefaults:
 
         vocabulary = load_list(ROOT / "vocabulary.md")
         fillers = load_list(ROOT / "filler.md")
-        assert "Hopf" in vocabulary
         assert "um" in fillers
         assert all(not t.startswith("#") for t in vocabulary + fillers)
+
+    def test_shipped_vocabulary_is_empty(self):
+        """Ships with no entries on purpose.
+
+        Hotwords are decoder context and Whisper will sometimes emit them into
+        its output, so an example term becomes a word that appears in the user's
+        text without being spoken. Only genuinely misrecognised words earn a
+        place here.
+        """
+        from lwstt.core.wordlists import load_list
+
+        assert load_list(ROOT / "vocabulary.md") == []
 
     def test_configured_hotkey_resolves(self):
         from lwstt.core.config import load_config

@@ -231,7 +231,8 @@ class TestAbort:
         sup.typed.clear()
         sup.abort(reason="escape")
         assert sup.typing.on_screen() == ""
-        assert all(e.backspaces <= len("~draft~") for e in sup.typed)
+        # The separator space between committed text and the preview counts too.
+        assert all(e.backspaces <= len(" ~draft~") for e in sup.typed)
 
     def test_abort_stops_the_recorder(self, sup):
         sup._arm()

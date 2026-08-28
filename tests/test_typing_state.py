@@ -289,3 +289,67 @@ class TestPreviewEdit:
         state = TypingState(leading_space=False)
         state.set_provisional("the cat")
         assert state.preview_edit("the dog").backspaces > 0
+
+
+class TestListeningMarkers:
+    """Empty markers appear the moment the hold threshold passes, before any
+    transcription exists. They confirm it is listening, and confirm the caret is
+    somewhere that accepts text."""
+
+    def test_markers_appear_with_no_text(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.set_listening(True))
+        assert screen.text == "~~"
+
+    def test_leading_space_applies_to_them(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.set_listening(True))
+        assert screen.text == " ~~"
+
+    def test_first_preview_fills_them_in(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.set_listening(True))
+        edit = state.set_provisional("hello")
+        screen.apply(edit)
+        assert screen.text == "~hello~"
+        assert edit.backspaces == 1, "only the closing marker moves"
+
+    def test_they_return_after_a_commit(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.set_listening(True))
+        screen.apply(state.set_provisional("hello"))
+        screen.apply(state.commit("Hello."))
+        assert screen.text == "Hello. ~~", "still listening after a chunk lands"
+
+    def test_clearing_them_leaves_committed_text(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.set_listening(True))
+        screen.apply(state.commit("Hello."))
+        screen.apply(state.set_listening(False))
+        assert screen.text == "Hello."
+
+    def test_abort_removes_them(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.set_listening(True))
+        screen.apply(state.abort())
+        assert screen.text == ""
+
+    def test_disabled_shows_nothing(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        assert state.set_listening(False).is_noop
+        assert screen.text == ""
+
+
+class TestSpacingBetweenCommittedAndPreview:
+    def test_preview_does_not_run_into_committed_text(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.commit("First sentence."))
+        screen.apply(state.set_provisional("second"))
+        assert screen.text == "First sentence. ~second~"
+
+    def test_committing_that_preview_keeps_one_space(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.commit("First sentence."))
+        screen.apply(state.set_provisional("second"))
+        screen.apply(state.commit("Second sentence."))
+        assert screen.text == "First sentence. Second sentence."
