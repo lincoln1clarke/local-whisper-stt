@@ -66,11 +66,14 @@ The settings most worth touching:
 
 | Setting | Default | Notes |
 |---|---|---|
-| `chunking.silence_gap_ms` | 800 | The most consequential number here. Too low splits sentences mid-thought and leaves a stray capital and period at the seam; too high delays commits. |
+| `chunking.silence_gap_ms` | 1000 | The most consequential number here. Too low splits sentences mid-thought and leaves a stray capital and period at the seam; too high delays commits. |
 | `hotkey.hold_threshold_ms` | 500 | Below this a press is discarded. |
 | `runtime.idle_exit_minutes_*` | 15 | Idle time before the worker is killed, per power state. Not a limit on dictation length. |
 | `runtime.max_dictation_minutes` | 60 | Only so a stuck key cannot record forever. |
 | `output.marker_open` / `_close` | `~` | Avoid characters editors auto-pair -- that breaks the typing invariant. |
+| `chunking.max_chunk_s` | 12 | Forced cut when you never pause. Lower commits more often; higher costs more per pass. |
+| `preview.refresh_ms` | 700 | Must stay above the ~0.3 s a preview pass costs, or previews starve the finals. |
+| `models.final_ac` | turbo | `faster-whisper-large-v3` is more accurate for ~0.5 s more per chunk. |
 
 ## How it is put together
 
@@ -82,8 +85,8 @@ a small idle footprint.
   the keyboard hook, audio capture (`winmm`), the typing state machine, the
   recording dot and the worker's lifecycle.
 - **Worker** (`lwstt/worker/`) is spawned on first use and killed after 15
-  minutes idle, returning all of its RAM and the ~4.7 GB of VRAM. It holds
-  faster-whisper, the VAD, both models and logging.
+  minutes idle, returning all of its RAM and VRAM. It holds faster-whisper,
+  the VAD, the models and logging.
 
 `lwstt/core/` is pure logic -- no Windows, no ML -- and is where nearly all the
 tests point.
@@ -91,8 +94,8 @@ tests point.
 ## Tests
 
 ```
-pytest              306 fast tests
-pytest -m slow      27 more, needing the models and a GPU
+pytest              350 fast tests
+pytest -m slow      32 more, needing the models and a GPU
 ```
 
 The slow tests transcribe real speech synthesised by Windows SAPI
@@ -112,7 +115,8 @@ Three classes of test are worth knowing about:
 
 ## Requirements
 
-- Windows, NVIDIA GPU with ~5 GB free VRAM
+- Windows, NVIDIA GPU with ~2 GB free VRAM on the default turbo-only setup
+  (~5 GB if `final_ac` is switched to `large-v3`)
 - Models in `%USERPROFILE%\ai-models\` (`faster-whisper-large-v3` and
   `faster-whisper-large-v3-turbo`)
 - `ffmpeg` on `PATH` for Opus log compression; without it logs stay as WAV
