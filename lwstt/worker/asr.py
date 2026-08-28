@@ -94,8 +94,9 @@ class ModelSlot:
 def speech_segments(
     audio: np.ndarray,
     sample_rate: int = 16000,
-    min_silence_ms: int = 300,
+    min_silence_ms: int = 200,
     threshold: float = 0.5,
+    speech_pad_ms: int = 0,
 ) -> list[Speech]:
     """Run Silero VAD and return speech regions in seconds.
 
@@ -103,11 +104,23 @@ def speech_segments(
     Whisper reliably emits training-set residue -- verified on this machine,
     both large-v3 and turbo return " Thank you." for three seconds of digital
     silence with VAD disabled.
+
+    ``speech_pad_ms`` defaults to **0**, not Silero's 400. Padding widens every
+    speech region on both sides, which narrows every gap between them by twice
+    the padding: a real 2.43 s pause measures as 1.63 s at the default. Chunk
+    boundaries are decided from these gaps, so padding silently doubles the
+    pause a speaker must leave before a chunk will close -- and a chunk that
+    never closes grows until the forced cut, dragging the preview pass with it.
+    Boundaries are padded explicitly at the cut instead (see CUT_PAD_S).
     """
     if audio.size == 0:
         return []
     _import_backend()
-    options = _VadOptions(threshold=threshold, min_silence_duration_ms=min_silence_ms)
+    options = _VadOptions(
+        threshold=threshold,
+        min_silence_duration_ms=min_silence_ms,
+        speech_pad_ms=speech_pad_ms,
+    )
     stamps = _get_speech_timestamps(audio, options, sampling_rate=sample_rate)
     return [Speech(s["start"] / sample_rate, s["end"] / sample_rate) for s in stamps]
 

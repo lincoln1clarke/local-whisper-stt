@@ -14,14 +14,14 @@
   "models": {
     "dir": "~/ai-models",
     "preview": "faster-whisper-large-v3-turbo",
-    "final_ac": "faster-whisper-large-v3",
-    "final_battery": "faster-whisper-large-v3",
+    "final_ac": "faster-whisper-large-v3-turbo",
+    "final_battery": "faster-whisper-large-v3-turbo",
     "device": "cuda",
     "compute_type": "float16"
   },
   "chunking": {
-    "silence_gap_ms": 800,
-    "max_chunk_s": 25.0
+    "silence_gap_ms": 1000,
+    "max_chunk_s": 12.0
   },
   "feedback": {
     "beep_on_arm": false,
@@ -31,7 +31,7 @@
   },
   "preview": {
     "enabled": true,
-    "refresh_ms": 400,
+    "refresh_ms": 700,
     "beam_size": 1
   },
   "final": {
@@ -60,7 +60,9 @@
   "output": {
     "marker_open": "~",
     "marker_close": "~",
-    "normalize_newlines_to_space": true
+    "normalize_newlines_to_space": true,
+    "leading_space": true,
+    "min_revision_interval_ms": 1200
   },
   "logging": {
     "enabled": true,

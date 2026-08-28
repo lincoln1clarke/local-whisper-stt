@@ -35,16 +35,16 @@ class AudioSection:
 class ModelsSection:
     dir: str = r"~/ai-models"
     preview: str = "faster-whisper-large-v3-turbo"
-    final_ac: str = "faster-whisper-large-v3"
-    final_battery: str = "faster-whisper-large-v3"
+    final_ac: str = "faster-whisper-large-v3-turbo"
+    final_battery: str = "faster-whisper-large-v3-turbo"
     device: str = "cuda"
     compute_type: str = "float16"
 
 
 @dataclass
 class ChunkingSection:
-    silence_gap_ms: int = 800
-    max_chunk_s: float = 25.0
+    silence_gap_ms: int = 1000
+    max_chunk_s: float = 12.0
 
 
 @dataclass
@@ -59,7 +59,10 @@ class FeedbackSection:
 @dataclass
 class PreviewSection:
     enabled: bool = True
-    refresh_ms: int = 400
+    # A preview pass costs ~0.3 s on turbo at any chunk length, so refreshing
+    # every 400 ms saturates the GPU and starves the finals that produce the
+    # real text. 700 ms leaves room for both.
+    refresh_ms: int = 700
     beam_size: int = 1
 
 
@@ -99,6 +102,12 @@ class OutputSection:
     marker_open: str = "~"
     marker_close: str = "~"
     normalize_newlines_to_space: bool = True
+    # Dictation usually starts where a caret already sits at the end of a word,
+    # and the target cannot be read to find out.
+    leading_space: bool = True
+    # Greedy decoding rewrites its own tail constantly; each rewrite is a
+    # visible delete-and-retype. Appends are free and always applied.
+    min_revision_interval_ms: int = 1200
 
 
 @dataclass
@@ -164,6 +173,7 @@ _POSITIVE_INT_FIELDS = {
     ("runtime", "idle_exit_minutes_ac"),
     ("runtime", "idle_exit_minutes_battery"),
     ("logging", "bitrate_kbps"),
+    ("output", "min_revision_interval_ms"),
 }
 
 

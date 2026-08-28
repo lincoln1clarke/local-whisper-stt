@@ -17,9 +17,15 @@ from .textproc import append_chunk
 
 
 class TypingState:
-    def __init__(self, marker_open: str = "~", marker_close: str = "~") -> None:
+    def __init__(
+        self,
+        marker_open: str = "~",
+        marker_close: str = "~",
+        leading_space: bool = True,
+    ) -> None:
         self.marker_open = marker_open
         self.marker_close = marker_close
+        self.leading_space = leading_space
         self.committed = ""
         self.provisional = ""
 
@@ -31,8 +37,29 @@ class TypingState:
         return f"{self.marker_open}{self.provisional}{self.marker_close}"
 
     def on_screen(self) -> str:
-        """Everything this program has typed and not removed."""
-        return self.committed + self.wrapped_provisional()
+        """Everything this program has typed and not removed.
+
+        The leading space is computed here rather than stored, so it appears
+        with the first character typed and disappears again on abort. Dictation
+        usually starts where a caret already sits at the end of a word, and
+        there is no way to read the target to find out.
+        """
+        body = self.committed + self.wrapped_provisional()
+        if not body:
+            return ""
+        return (" " if self.leading_space else "") + body
+
+    def preview_edit(self, text: str) -> Edit:
+        """What set_provisional(text) would emit, without changing anything.
+
+        Lets the caller decide whether an update is worth the visible rewrite.
+        """
+        before = self.on_screen()
+        saved = self.provisional
+        self.provisional = text
+        after = self.on_screen()
+        self.provisional = saved
+        return diff_edit(before, after)
 
     # -- transitions -----------------------------------------------------
 

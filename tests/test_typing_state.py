@@ -28,7 +28,9 @@ class Screen:
 
 @pytest.fixture
 def pair():
-    return TypingState(), Screen()
+    # leading_space off here: these tests are about the marker and diff
+    # mechanics. The space itself has its own class below.
+    return TypingState(leading_space=False), Screen()
 
 
 class TestProvisional:
@@ -156,7 +158,7 @@ class TestAbort:
 class TestCustomMarkers:
     @pytest.mark.parametrize("marker", ["~", "<>", "›", "¦", "**"])
     def test_markers_round_trip(self, marker):
-        state = TypingState(marker, marker)
+        state = TypingState(marker, marker, leading_space=False)
         screen = Screen()
         screen.apply(state.set_provisional("hello"))
         assert screen.text == f"{marker}hello{marker}"
@@ -164,13 +166,13 @@ class TestCustomMarkers:
         assert screen.text == "Hello."
 
     def test_asymmetric_markers(self):
-        state = TypingState("[[", "]]")
+        state = TypingState("[[", "]]", leading_space=False)
         screen = Screen()
         screen.apply(state.set_provisional("x"))
         assert screen.text == "[[x]]"
 
     def test_empty_markers_still_work(self):
-        state = TypingState("", "")
+        state = TypingState("", "", leading_space=False)
         screen = Screen()
         screen.apply(state.set_provisional("hello"))
         assert screen.text == "hello"
@@ -185,7 +187,7 @@ class TestProperties:
     @given(PREVIEWS, st.lists(st.text(max_size=25), max_size=5))
     def test_screen_always_matches_belief(self, previews, commits):
         """The core invariant: what we think is on screen is what is on screen."""
-        state, screen = TypingState(), Screen()
+        state, screen = TypingState(leading_space=False), Screen()
         for text in previews:
             screen.apply(state.set_provisional(text))
             assert screen.text == state.on_screen()
@@ -195,7 +197,7 @@ class TestProperties:
 
     @given(PREVIEWS)
     def test_abort_always_returns_to_committed(self, previews):
-        state, screen = TypingState(), Screen()
+        state, screen = TypingState(leading_space=False), Screen()
         screen.apply(state.commit("Base."))
         for text in previews:
             screen.apply(state.set_provisional(text))
@@ -204,8 +206,86 @@ class TestProperties:
 
     @given(PREVIEWS)
     def test_provisional_never_damages_committed_text(self, previews):
-        state, screen = TypingState(), Screen()
+        state, screen = TypingState(leading_space=False), Screen()
         screen.apply(state.commit("Immutable prefix."))
         for text in previews:
             screen.apply(state.set_provisional(text))
             assert screen.text.startswith("Immutable prefix.")
+
+
+class TestLeadingSpace:
+    """Dictation usually starts where a caret already sits at the end of a
+    word, and there is no way to read the target to find out."""
+
+    def test_a_space_precedes_the_first_preview(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.set_provisional("hello"))
+        assert screen.text == " ~hello~"
+
+    def test_a_space_precedes_a_commit_with_no_preview(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.commit("Hello."))
+        assert screen.text == " Hello."
+
+    def test_only_one_space_across_several_chunks(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.commit("One."))
+        screen.apply(state.commit("Two."))
+        assert screen.text == " One. Two."
+
+    def test_nothing_is_typed_before_there_is_content(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        assert state.on_screen() == ""
+        assert state.set_provisional("").is_noop
+        assert screen.text == ""
+
+    def test_abort_removes_the_space_too(self):
+        state, screen = TypingState(leading_space=True), Screen()
+        screen.apply(state.set_provisional("hello"))
+        screen.apply(state.abort())
+        assert screen.text == "", "a cancelled dictation must leave no stray space"
+
+    def test_disabled_leaves_no_space(self):
+        state, screen = TypingState(leading_space=False), Screen()
+        screen.apply(state.set_provisional("hello"))
+        assert screen.text == "~hello~"
+
+
+class TestPreviewEdit:
+    """peek-without-mutating, used to decide whether an update is worth the flicker."""
+
+    def test_matches_what_set_provisional_would_do(self):
+        for leading in (True, False):
+            state = TypingState(leading_space=leading)
+            state.set_provisional("the cat")
+            peeked = state.preview_edit("the car")
+            applied = state.set_provisional("the car")
+            assert peeked == applied
+
+    def test_does_not_mutate(self):
+        state = TypingState(leading_space=False)
+        state.set_provisional("hello")
+        before = state.on_screen()
+        state.preview_edit("something else entirely")
+        assert state.on_screen() == before
+
+    def test_growth_only_rewrites_the_closing_marker(self):
+        """Why the supervisor compares provisional text rather than this edit:
+        even a pure append rewrites the trailing marker."""
+        state = TypingState(leading_space=False)
+        state.set_provisional("hello")
+        edit = state.preview_edit("hello there")
+        assert edit.backspaces == 1
+        assert edit.text == " there~"
+
+    def test_growth_is_far_cheaper_than_revision(self):
+        state = TypingState(leading_space=False)
+        state.set_provisional("I went to the store")
+        growth = state.preview_edit("I went to the store today")
+        revision = state.preview_edit("I want to the shop today")
+        assert growth.keystrokes < revision.keystrokes
+
+    def test_revision_costs_backspaces(self):
+        state = TypingState(leading_space=False)
+        state.set_provisional("the cat")
+        assert state.preview_edit("the dog").backspaces > 0

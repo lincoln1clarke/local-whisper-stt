@@ -100,6 +100,37 @@ contention, which the silence gaps largely absorb. Rolling final passes are queu
 one at a time; two chunks closing in quick succession must not run concurrently on the
 same model instance.
 
+### The VAD padding trap
+
+Silero's `speech_pad_ms` defaults to **400**, widening every detected speech
+region on both sides. That narrows every gap *between* regions by twice the
+padding: a real 2.43 s pause measures as 1.63 s.
+
+Chunk boundaries are decided from those gaps, so the padding silently doubles
+the pause a speaker must leave before a chunk will close -- and a chunk that
+never closes grows until the forced cut, dragging the preview pass with it.
+Detection therefore runs with `speech_pad_ms=0`, and the cut is padded
+explicitly by `CUT_PAD_S` (0.25 s) so the last word is not clipped.
+
+### Measured cost of each pass
+
+Transcription latency by audio length, on this machine:
+
+| audio | turbo, greedy | large-v3, beam 5 | Silero VAD |
+|---|---|---|---|
+| 5 s | 0.28 s | 0.70 s | 0.007 s |
+| 12 s | 0.33 s | 0.85 s | 0.017 s |
+| 25 s | 0.43 s | **1.95 s** | 0.038 s |
+
+Two things follow. Turbo is nearly flat with length while large-v3 scales
+badly, which is what makes a bounded `max_chunk_s` matter. And a preview pass
+costs ~0.3 s, so a 400 ms refresh saturates the GPU and starves the finals that
+produce the real text -- the refresh interval must stay comfortably above the
+pass cost. It is 700 ms.
+
+`max_chunk_s` is 12 s rather than 25 s for the same reason: it bounds the worst
+case for both passes.
+
 ### What chunking is *not* free of: seam artifacts
 
 The independence argument above is about **accuracy** — no word is transcribed worse for
@@ -136,7 +167,15 @@ impossible. This matters more than the latency win.
 `faster-whisper` accepts `large-v3` and `turbo` / `large-v3-turbo` as built-in shorthands.
 
 - **Preview: `turbo`.** ~1.6 GB, 4 decoder layers vs `large-v3`'s 32.
-- **Final: `large-v3`**, on both AC and battery.
+- **Final: `turbo`**, on both AC and battery.
+
+When both slots name the same weights the worker shares one model rather than
+loading a second copy, halving VRAM and skipping a redundant load.
+
+*Measured:* on 12 s chunks large-v3 costs 0.85 s against turbo's 0.33 s, and
+end-to-end release latency differs by under 0.2 s. Switching `final_ac` back to
+`faster-whisper-large-v3` costs little and buys accuracy; it is a one-line
+change.
 
 Settings expose `preview`, `final_ac` and `final_battery` separately. Power state is read
 at key-down via `GetSystemPowerStatus`. Both finals are `large-v3` today, so this is

@@ -121,7 +121,7 @@ class TestPackagedDefaults:
         config, warnings = load_config(ROOT / "config.json")
         assert warnings == [], warnings
         assert config.hotkey.keys == ["right_ctrl", "right_alt"]
-        assert config.chunking.silence_gap_ms == 800
+        assert config.chunking.silence_gap_ms == 1000
         assert config.output.marker_open == "~"
 
     def test_shipped_config_matches_the_dataclass_defaults(self):

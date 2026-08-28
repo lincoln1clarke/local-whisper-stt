@@ -112,6 +112,7 @@ def sup(monkeypatch):
 
     supervisor = module.Supervisor(Config(), ROOT, log=lambda m: None)
     supervisor.worker = FakeWorker()
+    supervisor.config.output.min_revision_interval_ms = 0
     supervisor.typed = typed
     return supervisor
 
@@ -177,27 +178,27 @@ class TestTyping:
     def test_preview_is_typed_wrapped_in_markers(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "hello"})
-        assert sup.typing.on_screen() == "~hello~"
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typing.on_screen() == " ~hello~"
 
     def test_commit_removes_the_markers(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "helo"})
-        sup._on_worker_message(Msg.COMMIT, {"text": "Hello."})
-        assert sup.typing.on_screen() == "Hello."
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "helo"})
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Hello."})
+        assert sup.typing.on_screen() == " Hello."
 
     def test_an_empty_commit_clears_the_preview(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "noise"})
-        sup._on_worker_message(Msg.COMMIT, {"text": ""})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "noise"})
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": ""})
         assert sup.typing.on_screen() == ""
 
     def test_messages_arriving_after_a_dictation_are_ignored(self, sup):
         """A late reply must not type into whatever now has focus."""
         sup.dictating = False
-        sup._on_worker_message(Msg.PREVIEW, {"text": "late"})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "late"})
         assert sup.typed == []
 
     def test_focus_change_aborts_instead_of_typing(self, sup, monkeypatch):
@@ -205,10 +206,10 @@ class TestTyping:
 
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "hello"})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
         sup.typed.clear()
         monkeypatch.setattr(module, "foreground_window", lambda: 99999)
-        sup._on_worker_message(Msg.PREVIEW, {"text": "hello there"})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
         assert not sup.dictating, "a focus change must abort the dictation"
 
 
@@ -216,17 +217,17 @@ class TestAbort:
     def test_abort_removes_provisional_text(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "hello"})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
         sup.typed.clear()
         sup.abort(reason="escape")
-        assert sup.typed == [Edit(7, "")], "should backspace ~hello~"
+        assert sup.typed == [Edit(8, "")], "should backspace the space and ~hello~"
         assert not sup.dictating
 
     def test_abort_keeps_committed_text(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.COMMIT, {"text": "Committed."})
-        sup._on_worker_message(Msg.PREVIEW, {"text": "draft"})
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Committed."})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "draft"})
         sup.typed.clear()
         sup.abort(reason="escape")
         assert sup.typing.on_screen() == ""
@@ -241,7 +242,7 @@ class TestAbort:
     def test_worker_death_mid_dictation_aborts(self, sup):
         sup._arm()
         sup.dictating = True
-        sup._on_worker_message(Msg.PREVIEW, {"text": "hello"})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
         sup._on_worker_exit()
         assert not sup.dictating
 
@@ -275,3 +276,137 @@ class TestSettings:
         import json
 
         json.dumps(sup.worker_settings())
+
+
+class TestSessionIsolation:
+    """Every keypress must start from a clean slate.
+
+    A transcription still in flight when the keys are released can land after
+    the next dictation has begun. Without a session id it gets typed into the
+    new one, which looks like the previous dictation filling itself in on the
+    following keypress.
+    """
+
+    def test_a_reply_from_a_finished_dictation_is_ignored(self, sup):
+        sup._arm()
+        sup.dictating = True
+        stale = sup.session
+        sup._on_worker_message(Msg.PREVIEW, {"session": stale, "text": "first"})
+        assert sup.typing.on_screen() != ""
+
+        # Second dictation begins.
+        sup._disarm()
+        sup._arm()
+        sup.dictating = True
+        sup.typed.clear()
+
+        sup._on_worker_message(Msg.COMMIT, {"session": stale, "text": "leftover"})
+        assert sup.typed == [], "text from the previous dictation leaked"
+        assert "leftover" not in sup.typing.on_screen()
+
+    def test_the_current_session_is_accepted(self, sup):
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Hello."})
+        assert "Hello." in sup.typing.on_screen()
+
+    def test_a_message_with_no_session_is_ignored(self, sup):
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"text": "unlabelled"})
+        assert sup.typed == []
+
+    def test_each_arm_advances_the_session(self, sup):
+        first = sup.session
+        sup._arm()
+        second = sup.session
+        sup._disarm()
+        sup._arm()
+        assert first != second != sup.session
+
+    def test_settings_carry_the_session(self, sup):
+        sup._arm()
+        sup.armed_at -= 10
+        sup._pump_once()
+        assert sup.worker.started_with["session"] == sup.session
+
+
+class TestCancelOnTyping:
+    """Typing while a dictation is still finishing cancels the rest."""
+
+    def test_cancel_stops_further_output(self, sup):
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "draft"})
+        sup.cancel_pending("user typed")
+        sup.typed.clear()
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Too late."})
+        assert sup.typed == []
+        assert not sup.dictating
+
+    def test_cancel_does_not_backspace(self, sup):
+        """The user's own characters have landed; our count no longer describes
+        the document, so backspacing against it would eat their text."""
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "draft"})
+        sup.typed.clear()
+        sup.cancel_pending("user typed")
+        assert sup.typed == []
+
+    def test_cancel_tells_the_worker(self, sup):
+        sup._arm()
+        sup.dictating = True
+        sup.cancel_pending("user typed")
+        assert sup.worker.aborted
+
+    def test_cancel_when_idle_is_harmless(self, sup):
+        sup.cancel_pending("nothing running")
+        assert sup.typed == []
+
+    def test_a_keypress_while_finishing_invalidates_the_session(self, sup):
+        sup._arm()
+        sup.dictating = True
+        before = sup.session
+        sup.machine.state = type(sup.machine.state).IDLE  # released, still finishing
+        sup._on_key(0x41, True)  # user types "A"
+        assert sup.session != before, "in-flight replies must be invalidated at once"
+
+
+class TestFlashReduction:
+    def test_growth_is_always_applied(self, sup):
+        sup.config.output.min_revision_interval_ms = 10_000
+        sup._arm()
+        sup.dictating = True
+        for text in ("I", "I went", "I went to", "I went to the store"):
+            sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": text})
+        assert "I went to the store" in sup.typing.on_screen()
+
+    def test_rewording_is_rate_limited(self, sup):
+        sup.config.output.min_revision_interval_ms = 10_000
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "the cat sat"})
+        sup.typed.clear()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "the car sat"})
+        assert sup.typed == [], "a pure rewording should not flash"
+
+    def test_rewording_is_allowed_once_the_interval_passes(self, sup):
+        sup.config.output.min_revision_interval_ms = 0
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "the cat sat"})
+        sup.typed.clear()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "the car sat"})
+        assert sup.typed != []
+
+    def test_a_commit_is_never_suppressed(self, sup):
+        """Skipped rewordings are corrected by the commit, so it must always land."""
+        sup.config.output.min_revision_interval_ms = 10_000
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "the cat sat"})
+        sup.typed.clear()
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "The car sat."})
+        assert sup.typed != []
+        assert "The car sat." in sup.typing.on_screen()

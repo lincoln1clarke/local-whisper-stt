@@ -10,6 +10,11 @@ Wire format, per message:
     N bytes  payload
 
 Audio payloads are raw little-endian int16 PCM. Everything else is UTF-8 JSON.
+
+Every JSON message from the worker carries the ``session`` id it belongs to.
+Without it, a PREVIEW or COMMIT produced for one dictation can arrive after the
+next has started and be typed into it -- which looks like the previous
+dictation "filling itself in" on the following keypress.
 """
 
 from __future__ import annotations

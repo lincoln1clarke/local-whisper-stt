@@ -23,7 +23,7 @@ class TestDefaults:
         c = Config()
         assert c.hotkey.keys == ["right_ctrl", "right_alt"]
         assert c.hotkey.hold_threshold_ms == 500
-        assert c.chunking.silence_gap_ms == 800
+        assert c.chunking.silence_gap_ms == 1000
         assert c.output.marker_open == "~"
         assert c.final.condition_on_previous_text is False
         assert c.runtime.max_dictation_minutes == 60
@@ -83,18 +83,18 @@ class TestRecovery:
 
     def test_non_integer_float_for_an_int_field_falls_back(self):
         c, warnings = cfg({"preview": {"refresh_ms": 400.5}})
-        assert c.preview.refresh_ms == 400
+        assert c.preview.refresh_ms == 700  # the default
         assert warnings
 
     def test_whole_float_is_accepted_for_an_int_field(self):
         c, warnings = cfg({"preview": {"refresh_ms": 400.0}})
-        assert c.preview.refresh_ms == 400
+        assert c.preview.refresh_ms == 400  # accepted: a whole number
         assert warnings == []
 
     @pytest.mark.parametrize("bad", [0, -1, -500])
     def test_non_positive_values_fall_back(self, bad):
         c, warnings = cfg({"chunking": {"silence_gap_ms": bad}})
-        assert c.chunking.silence_gap_ms == 800
+        assert c.chunking.silence_gap_ms == 1000
         assert any("greater than 0" in w for w in warnings)
 
     def test_section_of_the_wrong_type_is_skipped(self):

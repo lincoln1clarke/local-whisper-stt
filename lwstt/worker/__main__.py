@@ -31,6 +31,9 @@ from . import asr, audio_log
 
 BYTES_PER_SAMPLE = 2
 PROCESS_INTERVAL = 0.1  # how often VAD + chunk decisions run
+# VAD boundaries are unpadded (see asr.speech_segments), so extend the cut a
+# little to avoid clipping the tail of the last word.
+CUT_PAD_S = 0.25
 
 
 def log(message: str) -> None:
@@ -71,6 +74,7 @@ class Worker:
         self.last_preview = 0.0
         self.last_preview_text = ""
         self.started_at = None
+        self.session = 0
         self.chunk_offset = 0.0  # seconds of this dictation already committed
 
     # -- reader thread ---------------------------------------------------
@@ -107,7 +111,11 @@ class Worker:
         compute = models.get("compute_type", "float16")
         if self.preview_slot is None or self.preview_slot.path != models.get("preview"):
             self.preview_slot = asr.ModelSlot(models["preview"], device, compute)
-        if self.final_slot is None or self.final_slot.path != models.get("final"):
+        if models.get("final") == models.get("preview"):
+            # Same weights for both passes: share one slot rather than loading a
+            # second copy. Halves VRAM and skips a redundant model load.
+            self.final_slot = self.preview_slot
+        elif self.final_slot is None or self.final_slot.path != models.get("final"):
             self.final_slot = asr.ModelSlot(models["final"], device, compute)
 
     def vocabulary_prompt(self) -> str:
@@ -168,11 +176,11 @@ class Worker:
         text = self.clean(asr.segments_text(segments))
         if text and text != self.last_preview_text:
             self.last_preview_text = text
-            self.send_json(Msg.PREVIEW, {"text": text})
+            self.send_json(Msg.PREVIEW, {"text": text, "session": self.session})
 
     def close_chunk(self, cut_at: float, forced: bool) -> None:
         """Finalise everything up to ``cut_at`` and emit it as committed."""
-        cut_bytes = int(cut_at * self.sample_rate) * BYTES_PER_SAMPLE
+        cut_bytes = int((cut_at + CUT_PAD_S) * self.sample_rate) * BYTES_PER_SAMPLE
         cut_bytes = min(cut_bytes, len(self.open_pcm))
         if cut_bytes <= 0:
             return
@@ -214,11 +222,20 @@ class Worker:
             self.committed.append(text)
             self.send_json(
                 Msg.COMMIT,
-                {"chunk": self.chunk_index, "text": text, "forced": forced},
+                {
+                    "chunk": self.chunk_index,
+                    "text": text,
+                    "forced": forced,
+                    "session": self.session,
+                },
             )
         else:
             # Nothing survived: still clear whatever preview is on screen.
-            self.send_json(Msg.COMMIT, {"chunk": self.chunk_index, "text": "", "forced": forced})
+            self.send_json(
+                Msg.COMMIT,
+                {"chunk": self.chunk_index, "text": "", "forced": forced,
+                 "session": self.session},
+            )
         self.chunk_index += 1
 
     def process_audio(self) -> None:
@@ -279,13 +296,15 @@ class Worker:
 
     def handle(self, msg: Msg, payload: bytes) -> None:
         if msg is Msg.START:
+            settings = decode_json(payload)
             self.reset_dictation()
-            self.settings = decode_json(payload)
+            self.settings = settings
+            self.session = int(settings.get("session", 0))
             self.dictating = True
             self.started_at = time.monotonic()
             self.ensure_models()
             self.settings["_hotwords"] = self.vocabulary_prompt()
-            self.send_json(Msg.READY, {"ok": True})
+            self.send_json(Msg.READY, {"ok": True, "session": self.session})
 
         elif msg is Msg.AUDIO:
             if self.dictating:
@@ -303,7 +322,9 @@ class Worker:
                     break
                 guard += 1
             self.write_log()
-            self.send_json(Msg.DONE, {"text": " ".join(self.committed)})
+            self.send_json(
+                Msg.DONE, {"text": " ".join(self.committed), "session": self.session}
+            )
             self.reset_dictation()
 
         elif msg is Msg.ABORT:

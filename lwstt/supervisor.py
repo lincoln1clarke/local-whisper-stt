@@ -43,7 +43,11 @@ class Supervisor:
 
         self.combo = keys.resolve_combo(config.hotkey.keys)
         self.machine = HotkeyMachine(self.combo)
-        self.typing = TypingState(config.output.marker_open, config.output.marker_close)
+        self.typing = TypingState(
+            config.output.marker_open,
+            config.output.marker_close,
+            leading_space=config.output.leading_space,
+        )
         self.dot = RecordingDot()
         self.recorder: Recorder | None = None
         self.hook: KeyboardHook | None = None
@@ -57,6 +61,8 @@ class Supervisor:
         )
 
         self.armed_at = 0.0
+        self.session = 0
+        self._last_revision = 0.0
         self.target_hwnd = 0
         self.threshold_passed = False
         self.dictating = False
@@ -73,6 +79,7 @@ class Supervisor:
         c = self.config
         battery = on_battery()
         return {
+            "session": self.session,
             "sample_rate": c.audio.sample_rate,
             "language": c.final.language,
             "models": {
@@ -141,12 +148,25 @@ class Supervisor:
 
     # -- worker messages -------------------------------------------------
 
+    def _is_current(self, obj: dict) -> bool:
+        """Reject replies belonging to a dictation that has already finished.
+
+        A transcription in flight when the keys are released can land after the
+        next dictation has begun. Without this check it gets typed into the new
+        one, which looks like the previous dictation filling itself in on the
+        following keypress.
+        """
+        return int(obj.get("session", -1)) == self.session
+
     def _on_worker_message(self, msg: Msg, obj: dict) -> None:
         with self._lock:
-            if not self.dictating and msg in (Msg.PREVIEW, Msg.COMMIT):
+            if msg in (Msg.PREVIEW, Msg.COMMIT, Msg.DONE) and not self._is_current(obj):
                 return
+            if msg in (Msg.PREVIEW, Msg.COMMIT) and not self.dictating:
+                return
+
             if msg is Msg.PREVIEW:
-                self._apply(self.typing.set_provisional(obj.get("text", "")))
+                self._apply_preview(obj.get("text", ""))
             elif msg is Msg.COMMIT:
                 text = obj.get("text", "")
                 if text:
@@ -162,6 +182,45 @@ class Supervisor:
                 self.log(f"worker error: {obj.get('message')}")
                 if self.config.feedback.beep_on_error:
                     beep(*ERROR_TONE)
+
+    def _apply_preview(self, text: str) -> None:
+        """Type a preview update, skipping churn that is not worth the flicker.
+
+        Greedy decoding rewrites its own tail constantly. Every rewrite is a
+        visible delete-and-retype, and most of them replace a few words with
+        near-identical ones. Growth is free -- appending costs no backspaces --
+        so it is always applied; rewrites are rate-limited, and the commit
+        corrects anything skipped.
+        """
+        if self.typing.preview_edit(text).is_noop:
+            return
+        # Compare the provisional *text*, not the screen edit: growing the
+        # preview still rewrites the closing marker, so every update looks like
+        # a revision at the screen level.
+        is_growth = text.startswith(self.typing.provisional)
+        if not is_growth:
+            now = time.monotonic()
+            interval = self.config.output.min_revision_interval_ms / 1000.0
+            if now - self._last_revision < interval:
+                return
+            self._last_revision = now
+        self._apply(self.typing.set_provisional(text))
+
+    def cancel_pending(self, reason: str) -> None:
+        """Stop producing output, without touching what is on screen.
+
+        Used when the user starts typing while a dictation is still finishing.
+        Their characters have already landed, so the character count this
+        program was tracking no longer describes the document -- backspacing
+        against it would eat their text. Abandon the tracking instead.
+        """
+        with self._lock:
+            if not self.dictating:
+                return
+            self.dictating = False
+            self.typing.reset()
+            self.worker.abort()
+            self.log(f"cancelled pending output: {reason}")
 
     def _on_worker_exit(self) -> None:
         with self._lock:
@@ -179,6 +238,12 @@ class Supervisor:
         modifier, and hands the signal to another thread. Nothing here waits on
         a lock the audio pump might be holding.
         """
+        if is_down and not self.machine.armed and self.dictating:
+            # Invalidate in-flight replies immediately: the signal thread
+            # may not run before the next worker message arrives.
+            self.session += 1
+            self._signals.put("cancel")
+
         decision = self.machine.on_key(vk, is_down)
 
         for inject_vk, inject_down in decision.inject:
@@ -204,7 +269,9 @@ class Supervisor:
             except queue.Empty:
                 continue
             try:
-                if signal is Signal.ARM:
+                if signal == "cancel":
+                    self.cancel_pending("user started typing")
+                elif signal is Signal.ARM:
                     self._arm()
                 elif signal is Signal.DISARM:
                     self._disarm()
@@ -216,6 +283,10 @@ class Supervisor:
     def _arm(self) -> None:
         with self._lock:
             self.armed_at = time.monotonic()
+            self.session += 1
+            # Measured from arming, so the very first reword is rate-limited
+            # like any other rather than passing for free.
+            self._last_revision = time.monotonic()
             self.threshold_passed = False
             self.target_hwnd = foreground_window()
             self.typing.reset()
