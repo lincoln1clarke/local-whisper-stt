@@ -30,6 +30,7 @@ from ..core.wordlists import build_prompt, fit_to_budget, load_list
 from . import asr, audio_log
 
 BYTES_PER_SAMPLE = 2
+PROCESS_INTERVAL = 0.1  # how often VAD + chunk decisions run
 
 
 def log(message: str) -> None:
@@ -323,21 +324,30 @@ class Worker:
 
     def run(self) -> None:
         threading.Thread(target=self.read_stdin, name="lwstt-worker-reader", daemon=True).start()
+        last_processed = 0.0
         while self.running:
             try:
-                msg, payload = self.inbox.get(timeout=0.05)
+                msg, payload = self.inbox.get(timeout=0.02)
             except queue.Empty:
+                pass
+            else:
+                try:
+                    self.handle(msg, payload)
+                except Exception as exc:
+                    log(f"handler error for {msg}: {exc}\n{traceback.format_exc()}")
+                    self.send_json(Msg.ERROR, {"message": str(exc)})
+
+            # Deliberately on a clock rather than "whenever the inbox is empty".
+            # Audio arrives every ~50 ms, so a queue-empty trigger starves under
+            # a steady stream -- exactly when there is most work to do.
+            now = time.monotonic()
+            if now - last_processed >= PROCESS_INTERVAL:
+                last_processed = now
                 try:
                     self.process_audio()
                 except Exception as exc:
                     log(f"processing error: {exc}\n{traceback.format_exc()}")
                     self.send_json(Msg.ERROR, {"message": str(exc)})
-                continue
-            try:
-                self.handle(msg, payload)
-            except Exception as exc:
-                log(f"handler error for {msg}: {exc}\n{traceback.format_exc()}")
-                self.send_json(Msg.ERROR, {"message": str(exc)})
 
 
 def main() -> int:

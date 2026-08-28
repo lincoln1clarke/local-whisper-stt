@@ -246,3 +246,54 @@ class TestLifecycle:
         h.client.stop()
         assert h.client.send_audio(b"\x00\x00") is False
         assert h.client.end_dictation() is False
+
+
+class TestPreviewLoop:
+    """The preview path, which the other tests deliberately disable."""
+
+    def test_preview_messages_arrive_during_a_dictation(self, tmp_path):
+        with Harness(tmp_path) as h:
+            h.settings["preview"] = {"enabled": True, "refresh_ms": 200, "beam_size": 1}
+            # Feed at roughly real time so the preview loop has something to chase.
+            h.client.start_dictation(h.settings)
+            assert h.ready.wait(120)
+            pcm = read_pcm(FIXTURES / "simple.wav")
+            step = 16000 * 2 // 10  # 100 ms
+            for i in range(0, len(pcm), step):
+                h.client.send_audio(pcm[i : i + step])
+                time.sleep(0.1)
+            h.client.end_dictation()
+            assert h.done.wait(180)
+            previews = [o.get("text", "") for m, o in h.messages if m is Msg.PREVIEW]
+        assert previews, "no preview was ever emitted"
+        assert any("fox" in p.lower() or "quick" in p.lower() for p in previews)
+
+    def test_preview_is_superseded_by_the_commit(self, tmp_path):
+        with Harness(tmp_path) as h:
+            h.settings["preview"] = {"enabled": True, "refresh_ms": 200, "beam_size": 1}
+            h.client.start_dictation(h.settings)
+            assert h.ready.wait(120)
+            pcm = read_pcm(FIXTURES / "simple.wav")
+            step = 16000 * 2 // 10
+            for i in range(0, len(pcm), step):
+                h.client.send_audio(pcm[i : i + step])
+                time.sleep(0.1)
+            h.client.end_dictation()
+            assert h.done.wait(180)
+            order = [m for m, _ in h.messages if m in (Msg.PREVIEW, Msg.COMMIT)]
+        assert Msg.COMMIT in order
+        assert order[-1] is Msg.COMMIT, "a preview must never be the last word"
+        assert "quick brown fox" in h.final_text().lower()
+
+    def test_silence_produces_no_preview(self, tmp_path):
+        with Harness(tmp_path) as h:
+            h.settings["preview"] = {"enabled": True, "refresh_ms": 200, "beam_size": 1}
+            h.client.start_dictation(h.settings)
+            assert h.ready.wait(120)
+            for _ in range(15):
+                h.client.send_audio(b"\x00\x00" * 1600)
+                time.sleep(0.1)
+            h.client.end_dictation()
+            assert h.done.wait(120)
+            previews = [o.get("text", "") for m, o in h.messages if m is Msg.PREVIEW]
+        assert previews == [], f"silence produced previews: {previews}"
