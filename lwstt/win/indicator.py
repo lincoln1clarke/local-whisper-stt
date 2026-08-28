@@ -205,6 +205,16 @@ class RecordingDot:
         self._topmost_timer.daemon = True
         self._topmost_timer.start()
 
+    def create(self) -> None:
+        """Create the window ahead of time, idempotently.
+
+        Call this from the thread that pumps messages: a window belongs to its
+        creating thread, and one owned by a thread with no message loop never
+        paints.
+        """
+        if self._hwnd is None:
+            self._create()
+
     def show(self) -> None:
         try:
             if self._hwnd is None:

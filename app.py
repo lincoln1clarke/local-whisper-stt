@@ -42,6 +42,11 @@ def write_log(message: str) -> None:
 
 
 def list_devices() -> int:
+    # Device names contain characters the legacy console codepage cannot encode.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
     from lwstt.win.audio import list_devices as enumerate_devices
 
     devices = enumerate_devices()

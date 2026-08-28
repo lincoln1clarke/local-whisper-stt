@@ -4,7 +4,9 @@ A local push-to-talk dictation app for Windows. Hold a hotkey, speak, release, a
 text is typed into whatever has focus. Everything runs on this machine — no account, no
 network, no outage.
 
-Status: **planned, not built.**
+Status: **built; awaiting real-world testing.** 333 tests pass (306 fast, 27
+needing the models). Everything below has been implemented. What has *not*
+happened is a human holding the keys and speaking -- see `README.md` to run it.
 
 ## Why
 

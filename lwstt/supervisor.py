@@ -8,6 +8,7 @@ enforces that.
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from pathlib import Path
@@ -60,9 +61,11 @@ class Supervisor:
         self.threshold_passed = False
         self.dictating = False
         self.stopping = threading.Event()
+        self._signals: "queue.Queue[Signal]" = queue.Queue()
         self._lock = threading.RLock()
         self._pump_thread: threading.Thread | None = None
         self._idle_thread: threading.Thread | None = None
+        self._signal_thread: threading.Thread | None = None
 
     # -- settings handed to the worker -----------------------------------
 
@@ -169,6 +172,13 @@ class Supervisor:
     # -- hotkey ----------------------------------------------------------
 
     def _on_key(self, vk: int, is_down: bool) -> bool:
+        """Runs inside the low-level hook. Must never block.
+
+        A blocked WH_KEYBOARD_LL callback stalls keyboard input for the entire
+        machine, so this only runs the state machine, replays any deferred
+        modifier, and hands the signal to another thread. Nothing here waits on
+        a lock the audio pump might be holding.
+        """
         decision = self.machine.on_key(vk, is_down)
 
         for inject_vk, inject_down in decision.inject:
@@ -182,14 +192,26 @@ class Supervisor:
             except OSError:
                 pass
 
-        if decision.signal is Signal.ARM:
-            self._arm()
-        elif decision.signal is Signal.DISARM:
-            self._disarm()
-        elif decision.signal is Signal.ABORT:
-            self.abort(reason="escape")
+        if decision.signal is not Signal.NONE:
+            self._signals.put(decision.signal)
 
         return decision.swallow
+
+    def _signal_loop(self) -> None:
+        while not self.stopping.is_set():
+            try:
+                signal = self._signals.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                if signal is Signal.ARM:
+                    self._arm()
+                elif signal is Signal.DISARM:
+                    self._disarm()
+                elif signal is Signal.ABORT:
+                    self.abort(reason="escape")
+            except Exception as exc:
+                self.log(f"signal {signal.name} failed: {exc}")
 
     def _arm(self) -> None:
         with self._lock:
@@ -257,31 +279,39 @@ class Supervisor:
 
     # -- background loops ------------------------------------------------
 
+    def _pump_once(self) -> None:
+        """One iteration of the audio pump. Split out so it is testable."""
+        with self._lock:
+            recorder = self.recorder
+            if recorder is None:
+                return
+            held = time.monotonic() - self.armed_at
+            if not self.threshold_passed:
+                if held * 1000 < self.config.hotkey.hold_threshold_ms:
+                    return
+                # Threshold cleared: this is a real dictation. Nothing is typed
+                # before this point, so a discarded tap leaves nothing behind.
+                self.threshold_passed = True
+                self.dictating = True
+                self.worker.start_dictation(self.worker_settings())
+            data = recorder.read_available()
+            if data:
+                self.worker.send_audio(data)
+            max_seconds = self.config.runtime.max_dictation_minutes * 60
+            if recorder.seconds_recorded > max_seconds:
+                # A stuck key must not record forever. Commit what we have
+                # rather than discarding it.
+                self.log("hit max_dictation_minutes; committing what we have")
+                self._disarm()
+
     def _pump_audio(self) -> None:
         """Stream captured audio to the worker while the keys are held."""
-        max_seconds = self.config.runtime.max_dictation_minutes * 60
         while not self.stopping.is_set():
             time.sleep(AUDIO_PUMP_INTERVAL)
-            with self._lock:
-                recorder = self.recorder
-                if recorder is None:
-                    continue
-                held = time.monotonic() - self.armed_at
-                if not self.threshold_passed:
-                    if held * 1000 < self.config.hotkey.hold_threshold_ms:
-                        continue
-                    # Threshold cleared: this is a real dictation. Nothing is
-                    # typed before this point, so a discarded tap leaves nothing
-                    # behind.
-                    self.threshold_passed = True
-                    self.dictating = True
-                    self.worker.start_dictation(self.worker_settings())
-                data = recorder.read_available()
-                if data:
-                    self.worker.send_audio(data)
-                if recorder.seconds_recorded > max_seconds:
-                    self.log("hit max_dictation_minutes; committing what we have")
-                    self._disarm()
+            try:
+                self._pump_once()
+            except Exception as exc:
+                self.log(f"audio pump error: {exc}")
 
     def _idle_watch(self) -> None:
         """Kill the worker after the configured idle period."""
@@ -298,6 +328,15 @@ class Supervisor:
     # -- run -------------------------------------------------------------
 
     def start(self) -> None:
+        # The dot must be created on the thread that pumps messages: a
+        # window is owned by its creating thread, and one owned by a thread
+        # with no message loop never paints. start() runs on the same thread
+        # that goes on to call hook.pump().
+        if self.config.feedback.recording_dot:
+            try:
+                self.dot.create()
+            except OSError as exc:
+                self.log(f"recording dot unavailable: {exc}")
         self.hook = KeyboardHook(self._on_key)
         self.hook.install()
         self._pump_thread = threading.Thread(
@@ -308,6 +347,10 @@ class Supervisor:
             target=self._idle_watch, name="lwstt-idle", daemon=True
         )
         self._idle_thread.start()
+        self._signal_thread = threading.Thread(
+            target=self._signal_loop, name="lwstt-signals", daemon=True
+        )
+        self._signal_thread.start()
         if self.config.runtime.preload_on_start:
             self.worker.start()
 
