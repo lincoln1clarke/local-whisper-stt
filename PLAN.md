@@ -185,16 +185,16 @@ convert from OpenAI's own repos:
 
 ```
 ct2-transformers-converter --model openai/whisper-large-v3 \
-  --output_dir %USERPROFILE%\models\whisper\large-v3 \
+  --output_dir %USERPROFILE%\ai-models\large-v3 \
   --copy_files tokenizer.json preprocessor_config.json --quantization float16
 ```
 
 Conversion is deterministic, so hashing the output against a downloaded `model.bin` also
 *verifies* that the third-party copy is unmodified.
 
-**Storage:** `%USERPROFILE%\models\`, not inside this repo — a multi-GB blob in a code
+**Storage:** `%USERPROFILE%\ai-models\`, not inside this repo — a multi-GB blob in a code
 project is a `.gitignore` accident, and other projects transcribing video should not have
-to reach into an app folder. Set a user-level `HF_HOME=%USERPROFILE%\models\hf` so every
+to reach into an app folder. Set a user-level `HF_HOME=%USERPROFILE%\ai-models\hf` so every
 future HuggingFace download from any tool lands there instead of `~\.cache`.
 
 Models are loaded **by absolute local path**, with `HF_HUB_OFFLINE=1` set, so the runtime
@@ -226,7 +226,7 @@ answers prioritisation without needing a scoring scheme.
     "open_on_keydown": true
   },
   "models": {
-    "dir": "%USERPROFILE%/models/whisper",
+    "dir": "~/ai-models",
     "preview": "large-v3-turbo",
     "final_ac": "large-v3",
     "final_battery": "large-v3",
@@ -258,6 +258,7 @@ answers prioritisation without needing a scoring scheme.
   "filler":     { "file": "filler.md", "enabled": true },
   "runtime": {
     "preload_on_start": false,
+    "max_dictation_minutes": 60,
     "idle_unload_minutes_ac": 15,
     "idle_unload_minutes_battery": 15,
     "idle_exit_minutes_ac": 15,
@@ -522,6 +523,13 @@ Holds `faster-whisper`, CTranslate2, ONNX Runtime, the Silero VAD, and both mode
 chunk-boundary detection, both transcription passes, log writing, and the detached
 `ffmpeg` encode. Killed outright when idle, returning **all** of its RAM and VRAM.
 
+**"Idle" means no dictation has happened for that long — it is not a limit on how long a
+single dictation may run.** A dictation can continue indefinitely; rolling finalization
+means a 45-minute one costs no more at release than a 30-second one. The only cap is
+`runtime.max_dictation_minutes` (default 60), which exists purely so a stuck key cannot
+record forever, and hitting it commits everything transcribed so far rather than
+discarding it.
+
 Eviction timing is settable per power state, mirroring the model settings:
 
 | Knob | Default | Effect |
@@ -765,16 +773,25 @@ doesn't feed back into anything actionable. Not worth the complexity or the volu
 One-time, and none of it is code. Worth writing down because the plan otherwise assumes a
 machine that is already in this state.
 
-1. Set a user-level `HF_HOME=%USERPROFILE%\models\hf`.
-2. Relocate the existing model. Today the only copy is
+Models live in `%USERPROFILE%\ai-models\` as flat, self-contained directories loaded by
+absolute path — no cache indirection, no snapshot hashes:
+
+```
+%USERPROFILE%\ai-models\faster-whisper-large-v3\        final pass
+%USERPROFILE%\ai-models\faster-whisper-large-v3-turbo\  preview pass
+```
+
+1. **Done.** `large-v3` copied out of the HuggingFace cache (2.9 GB, no re-download).
+2. **Done.** `large-v3-turbo` fetched from `mobiuslabsgmbh`.
+3. **Done.** venv created; `faster-whisper` + `numpy` installed, no `torch`.
+4. **Done.** `ffmpeg` 7.1.1 already on `PATH`.
+5. Optionally set a user-level `HF_HOME=%USERPROFILE%\ai-models\hf` so future
+   HuggingFace downloads from any tool land there rather than `~\.cache`.
+6. The original cache copy at
    `%USERPROFILE%\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3`
-   (2.9 GB). Moving the `hub` folder under the new `HF_HOME` avoids any re-download.
-   Optionally convert from `openai/whisper-large-v3` instead (see *Model provenance*).
-3. Fetch `turbo` for the preview pass — not currently on disk.
-4. Create the venv and install from a hash-pinned requirements lock. No `torch`.
-5. Put `ffmpeg.exe` on `PATH`. Absent, logs stay as WAV and nothing else breaks.
-6. Add the Windows Firewall outbound-block rule for the venv's `python.exe`.
-7. Add the Startup-folder shortcut to `pythonw.exe app.py`.
+   is now redundant and can be deleted to reclaim 2.9 GB.
+7. Add the Windows Firewall outbound-block rule for the venv's `python.exe`.
+8. Add the Startup-folder shortcut to `pythonw.exe app.py`.
 
 ## Build order
 
