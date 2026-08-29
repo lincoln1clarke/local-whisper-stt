@@ -181,7 +181,17 @@ def count_tokens_with(slot: ModelSlot):
     def count(text: str) -> int:
         model = slot.get()
         try:
-            return len(model.hf_tokenizer.encode(text).ids)
+            # add_special_tokens=False: the prompt is spliced into an existing
+            # token sequence, so the tokenizer's own BOS/EOS are not part of its
+            # cost. Counting them charges several tokens per call that never
+            # reach the model.
+            return len(model.hf_tokenizer.encode(text, add_special_tokens=False).ids)
+        except TypeError:
+            # Older tokenizers bindings without the keyword.
+            try:
+                return len(model.hf_tokenizer.encode(text).ids)
+            except Exception:
+                return max(1, (len(text) + 3) // 4)
         except Exception:
             return max(1, (len(text) + 3) // 4)
 

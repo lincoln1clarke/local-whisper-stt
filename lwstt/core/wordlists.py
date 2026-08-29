@@ -63,18 +63,21 @@ def fit_to_budget(
     Stops at the first term that does not fit rather than skipping it to squeeze
     in later ones. That keeps the rule legible for a hand-edited file: everything
     above the cut is in, everything below is out.
+
+    The **assembled prompt** is measured, not the sum of the individual terms.
+    Tokenizers add special tokens to every call and merge across boundaries, so
+    per-term costs do not add up to the cost of the joined string -- measuring
+    term by term charged roughly two and a half times the real price and
+    truncated the list far earlier than the budget required.
     """
     if max_tokens <= 0:
         return []
     kept: list[str] = []
-    used = 0
-    sep_cost = count_tokens(separator)
     for term in terms:
-        cost = count_tokens(term) + (sep_cost if kept else 0)
-        if used + cost > max_tokens:
+        candidate = separator.join([*kept, term])
+        if count_tokens(candidate) > max_tokens:
             break
         kept.append(term)
-        used += cost
     return kept
 
 

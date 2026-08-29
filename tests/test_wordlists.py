@@ -142,12 +142,23 @@ class TestBudget:
         assert fit_to_budget(["aaaa", "bbbb"], 10, count) == ["aaaa", "bbbb"]
 
     def test_custom_counter_is_used(self):
-        # With a constant counter each term costs 1 and each separator 1, so
-        # "a" costs 1 and "a, b" costs 3.
-        one = lambda t: 1  # noqa: E731
-        assert fit_to_budget(["a", "b", "c"], 1, one) == ["a"]
-        assert fit_to_budget(["a", "b", "c"], 3, one) == ["a", "b"]
-        assert fit_to_budget(["a", "b", "c"], 5, one) == ["a", "b", "c"]
+        # The assembled prompt is measured: "a" is 1 char, "a, b" is 4.
+        assert fit_to_budget(["a", "b", "c"], 1, len) == ["a"]
+        assert fit_to_budget(["a", "b", "c"], 4, len) == ["a", "b"]
+        assert fit_to_budget(["a", "b", "c"], 7, len) == ["a", "b", "c"]
+
+    def test_measures_the_assembled_prompt_not_the_sum_of_terms(self):
+        """Per-term counting overcharges: tokenizers add special tokens to every
+        call and merge across boundaries, so the parts exceed the whole."""
+        calls = []
+
+        def counting(text):
+            calls.append(text)
+            return len(text)
+
+        fit_to_budget(["alpha", "beta"], 100, counting)
+        assert calls == ["alpha", "alpha, beta"]
+        assert all(", " not in c or c.startswith("alpha") for c in calls)
 
     @given(st.lists(st.text(min_size=1, max_size=20), max_size=30), st.integers(0, 300))
     def test_result_is_always_a_prefix(self, terms, budget):
@@ -158,9 +169,7 @@ class TestBudget:
     def test_never_exceeds_the_budget(self, terms, budget):
         kept = fit_to_budget(terms, budget)
         if kept:
-            total = sum(approx_token_count(t) for t in kept)
-            total += approx_token_count(", ") * (len(kept) - 1)
-            assert total <= budget
+            assert approx_token_count(build_prompt(kept)) <= budget
 
 
 class TestPrompt:
