@@ -17,3 +17,6 @@ pass is biased.
 
 Add entries below, one per line:
 
+- Claude
+- Git
+- SQLAlchemy
