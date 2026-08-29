@@ -143,17 +143,31 @@ class TestPackagedDefaults:
         assert "um" in fillers
         assert all(not t.startswith("#") for t in vocabulary + fillers)
 
-    def test_shipped_vocabulary_is_empty(self):
-        """Ships with no entries on purpose.
+    def test_vocabulary_holds_only_real_entries(self):
+        """This file belongs to the user, so its contents are not asserted --
+        only that nothing from the surrounding prose leaks in as a term.
 
-        Hotwords are decoder context and Whisper will sometimes emit them into
-        its output, so an example term becomes a word that appears in the user's
-        text without being spoken. Only genuinely misrecognised words earn a
-        place here.
+        It ships with no entries: hotwords are decoder context and Whisper will
+        sometimes emit them into its output, so a placeholder example becomes a
+        word that appears in the user's text without being spoken.
         """
         from lwstt.core.wordlists import load_list
 
-        assert load_list(ROOT / "vocabulary.md") == []
+        for term in load_list(ROOT / "vocabulary.md"):
+            assert term.strip() == term
+            assert not term.startswith(("#", "*", "-"))
+            assert len(term) < 60, f"prose leaked in as a term: {term!r}"
+
+    def test_vocabulary_fits_the_configured_budget(self):
+        """A term below the cut is unused, never an error -- but if the very
+        first entry cannot fit, the list does nothing at all."""
+        from lwstt.core.config import load_config
+        from lwstt.core.wordlists import fit_to_budget, load_list
+
+        config, _ = load_config(ROOT / "config.json")
+        terms = load_list(ROOT / "vocabulary.md")
+        if terms:
+            assert fit_to_budget(terms, config.vocabulary.max_tokens)
 
     def test_configured_hotkey_resolves(self):
         from lwstt.core.config import load_config
