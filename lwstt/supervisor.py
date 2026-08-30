@@ -32,6 +32,8 @@ from .win.system import (
 )
 
 AUDIO_PUMP_INTERVAL = 0.05
+# How long to keep trying to clean markers stranded by a focus change.
+CLEANUP_GRACE_S = 30.0
 IDLE_CHECK_INTERVAL = 5.0
 
 
@@ -65,6 +67,8 @@ class Supervisor:
         self._last_revision = 0.0
         self._aborted_this_press = False
         self._awaiting_done_since: float | None = None
+        self._cleanup_hwnd = 0
+        self._cleanup_deadline = 0.0
         self.target_hwnd = 0
         self.threshold_passed = False
         self.dictating = False
@@ -146,10 +150,11 @@ class Supervisor:
             # No foreground window right now. Nothing to type into and nothing
             # to be confused about; wait for it to come back.
             return True
-        self.log(
-            f"focus changed ({window_title(self.target_hwnd)!r} [{self.target_hwnd}]"
-            f" -> {window_title(current)!r} [{current}]); aborting"
-        )
+        if not self._aborted_this_press:
+            self.log(
+                f"focus changed ({window_title(self.target_hwnd)!r} [{self.target_hwnd}]"
+                f" -> {window_title(current)!r} [{current}]); aborting"
+            )
         return False
 
     def _apply(self, edit) -> bool:
@@ -164,6 +169,17 @@ class Supervisor:
         if not self._focus_intact():
             self.abort(reason="focus changed", restore=False)
             return False
+        try:
+            sendinput.apply_edit(edit.backspaces, edit.text)
+        except OSError as exc:
+            self.log(f"typing failed: {exc}")
+            return False
+        return True
+
+    def _type_edit(self, edit) -> bool:
+        """Type an edit whose target has already been verified by the caller."""
+        if edit.is_noop:
+            return True
         try:
             sendinput.apply_edit(edit.backspaces, edit.text)
         except OSError as exc:
@@ -321,11 +337,30 @@ class Supervisor:
 
         return decision.swallow
 
+    def _try_deferred_cleanup(self) -> None:
+        """Remove markers stranded by a focus change, once focus returns."""
+        with self._lock:
+            if not self._cleanup_hwnd:
+                return
+            if time.monotonic() > self._cleanup_deadline:
+                self.log("gave up on stranded markers: focus never came back")
+                self._cleanup_hwnd = 0
+                self.typing.reset()
+                return
+            if foreground_window() != self._cleanup_hwnd:
+                return
+            self._type_edit(self.typing.set_listening(False))
+            self._type_edit(self.typing.abort())
+            self.typing.reset()
+            self._cleanup_hwnd = 0
+            self.log("cleared markers stranded by a focus change")
+
     def _signal_loop(self) -> None:
         while not self.stopping.is_set():
             try:
                 signal = self._signals.get(timeout=0.1)
             except queue.Empty:
+                self._try_deferred_cleanup()
                 continue
             try:
                 if signal == "cancel":
@@ -342,6 +377,8 @@ class Supervisor:
     def _arm(self) -> None:
         with self._lock:
             self.armed_at = time.monotonic()
+            self._try_deferred_cleanup()
+            self._cleanup_hwnd = 0
             self._awaiting_done_since = None
             self.session += 1
             self._aborted_this_press = False
@@ -405,12 +442,17 @@ class Supervisor:
             self._stop_recording()
             if restore:
                 edit = self.typing.abort()
-                if not edit.is_noop:
-                    try:
-                        sendinput.apply_edit(edit.backspaces, edit.text)
-                    except OSError:
-                        pass
-            self.typing.reset()
+                self._type_edit(edit)
+                self.typing.reset()
+            elif self.typing.on_screen():
+                # Cannot type now -- something else has the keyboard, and
+                # backspacing would eat text in a document these characters
+                # never went into. Remember what is stranded and clean it up if
+                # focus comes back, rather than abandoning it on screen.
+                self._cleanup_hwnd = self.target_hwnd
+                self._cleanup_deadline = time.monotonic() + CLEANUP_GRACE_S
+            else:
+                self.typing.reset()
             if self.dictating:
                 self.worker.abort()
             self.dictating = False

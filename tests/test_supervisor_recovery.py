@@ -152,3 +152,78 @@ class TestFinalizeWatchdog:
         assert sup.typing.committed == ""
         assert sup.typing.provisional == ""
         assert sup.dictating
+
+
+class TestStrandedByFocusChange:
+    """Markers left behind when focus moves mid-dictation.
+
+    Typing into the new window would delete text in a document these characters
+    never went into, so the cleanup waits for focus to come back rather than
+    forgetting the markers exist.
+    """
+
+    def _strand(self, sup, module, monkeypatch):
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 99999)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
+
+    def test_nothing_is_typed_into_the_new_window(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        sup.typed.clear()
+        sup._try_deferred_cleanup()
+        assert sup.typed == [], "must not backspace into someone else's document"
+
+    def test_the_stranded_markers_are_remembered(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        assert sup._cleanup_hwnd == 12345
+        assert sup.typing.on_screen() != "", "state must survive to describe the cleanup"
+
+    def test_cleanup_runs_when_focus_returns(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        sup.typed.clear()
+        monkeypatch.setattr(module, "foreground_window", lambda: 12345)
+        sup._try_deferred_cleanup()
+        assert sup.typed != [], "markers should be removed once focus is back"
+        assert sup.typing.on_screen() == ""
+        assert sup._cleanup_hwnd == 0
+
+    def test_cleanup_gives_up_after_the_grace_period(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        sup._cleanup_deadline = time.monotonic() - 1
+        sup.typed.clear()
+        sup._try_deferred_cleanup()
+        assert sup.typed == []
+        assert sup._cleanup_hwnd == 0, "must not retry forever"
+
+    def test_a_new_dictation_supersedes_a_pending_cleanup(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        monkeypatch.setattr(module, "foreground_window", lambda: 12345)
+        _run_to_threshold(sup)
+        assert sup._cleanup_hwnd == 0
+        assert sup.typing.committed == ""
+
+    def test_idle_supervisor_does_nothing(self, sup):
+        sup._try_deferred_cleanup()
+        assert sup.typed == []
+
+    def test_focus_change_is_logged_once_per_press(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        messages = []
+        sup.log = messages.append
+        self._strand(sup, module, monkeypatch)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "more"})
+        # "aborted: focus changed" also contains the phrase; count the
+        # diagnostic line itself, which is the noisy one.
+        assert sum(m.startswith("focus changed") for m in messages) == 1
