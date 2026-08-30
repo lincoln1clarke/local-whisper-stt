@@ -96,6 +96,10 @@ class FillerSection:
 class RuntimeSection:
     preload_on_start: bool = False
     max_dictation_minutes: int = 60
+    # After the keys are released, how long to wait for the worker to finish
+    # before giving up and clearing the markers off screen. Without this a dead
+    # or wedged worker leaves stray tildes and no explanation.
+    finalize_timeout_s: int = 30
     idle_unload_minutes_ac: int = 15
     idle_unload_minutes_battery: int = 15
     idle_exit_minutes_ac: int = 15
@@ -178,6 +182,7 @@ _POSITIVE_INT_FIELDS = {
     ("final", "beam_size"),
     ("vocabulary", "max_tokens"),
     ("runtime", "max_dictation_minutes"),
+    ("runtime", "finalize_timeout_s"),
     ("runtime", "idle_unload_minutes_ac"),
     ("runtime", "idle_unload_minutes_battery"),
     ("runtime", "idle_exit_minutes_ac"),

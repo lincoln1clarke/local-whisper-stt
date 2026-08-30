@@ -64,6 +64,7 @@ class Supervisor:
         self.session = 0
         self._last_revision = 0.0
         self._aborted_this_press = False
+        self._awaiting_done_since: float | None = None
         self.target_hwnd = 0
         self.threshold_passed = False
         self.dictating = False
@@ -198,6 +199,7 @@ class Supervisor:
                 # so they would otherwise be left behind on screen.
                 self._apply(self.typing.set_listening(False))
                 self.dictating = False
+                self._awaiting_done_since = None
                 self.typing.reset()
             elif msg is Msg.ERROR:
                 self.log(f"worker error: {obj.get('message')}")
@@ -239,6 +241,7 @@ class Supervisor:
             if not self.dictating:
                 return
             self.dictating = False
+            self._awaiting_done_since = None
             self.typing.reset()
             self.worker.abort()
             self.log(f"cancelled pending output: {reason}")
@@ -247,7 +250,7 @@ class Supervisor:
         with self._lock:
             if self.dictating:
                 self.log("worker died mid-dictation")
-                self.abort(reason="worker exited")
+                self._finish_locally("worker exited")
 
     # -- hotkey ----------------------------------------------------------
 
@@ -304,6 +307,7 @@ class Supervisor:
     def _arm(self) -> None:
         with self._lock:
             self.armed_at = time.monotonic()
+            self._awaiting_done_since = None
             self.session += 1
             self._aborted_this_press = False
             # Measured from arming, so the very first reword is rate-limited
@@ -333,8 +337,11 @@ class Supervisor:
         self.dot.hide()
         if not self.recorder:
             return b""
-        tail = self.recorder.read_available()
+        # stop() first, then read: stopping flushes the buffer the driver was
+        # still filling into the queue. Reading before it drops that tail, which
+        # is the word being spoken as the keys are released.
         self.recorder.stop()
+        tail = self.recorder.read_available()
         self.recorder = None
         return tail
 
@@ -351,7 +358,12 @@ class Supervisor:
                 return
             if tail:
                 self.worker.send_audio(tail)
-            self.worker.end_dictation()
+            if self.worker.end_dictation():
+                self._awaiting_done_since = time.monotonic()
+            else:
+                # The worker is gone; no DONE is coming.
+                self.log("worker unreachable on release; finishing locally")
+                self._finish_locally("worker unreachable")
 
     def abort(self, reason: str = "", restore: bool = True) -> None:
         with self._lock:
@@ -368,6 +380,7 @@ class Supervisor:
                 self.worker.abort()
             self.dictating = False
             self.threshold_passed = False
+            self._awaiting_done_since = None
             self._aborted_this_press = True
             if reason:
                 self.log(f"aborted: {reason}")
@@ -412,10 +425,37 @@ class Supervisor:
             except Exception as exc:
                 self.log(f"audio pump error: {exc}")
 
+    def _finish_locally(self, reason: str) -> None:
+        """End a dictation the worker will never finish.
+
+        Clears the markers off screen so the user is not left with stray tildes
+        and no explanation, and keeps committed text, which is already final.
+        """
+        with self._lock:
+            self._apply(self.typing.set_listening(False))
+            self._apply(self.typing.abort())
+            self.typing.reset()
+            self.dictating = False
+            self._awaiting_done_since = None
+            self.log(f"finished without the worker: {reason}")
+            if self.config.feedback.beep_on_error:
+                beep(*ERROR_TONE)
+
+    def _check_finalize_timeout(self) -> None:
+        with self._lock:
+            started = self._awaiting_done_since
+            if started is None:
+                return
+            waited = time.monotonic() - started
+            if waited < self.config.runtime.finalize_timeout_s:
+                return
+            self._finish_locally(f"no result after {waited:.0f}s")
+
     def _idle_watch(self) -> None:
         """Kill the worker after the configured idle period."""
         while not self.stopping.is_set():
             time.sleep(IDLE_CHECK_INTERVAL)
+            self._check_finalize_timeout()
             with self._lock:
                 if self.dictating or not self.worker.alive:
                     continue

@@ -222,11 +222,16 @@ class Recorder:
         if not self._running.is_set():
             return
         self._running.clear()
+        # waveInReset returns every buffer the driver still holds, including the
+        # partially filled one. Harvest those *before* tearing the headers down,
+        # or the tail of the recording is thrown away -- up to a full buffer of
+        # audio, which is exactly the last word the user spoke before letting go.
         winmm.waveInStop(self._handle)
         winmm.waveInReset(self._handle)
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
+        self.drain_ready(requeue=False)
         for header in self._headers:
             winmm.waveInUnprepareHeader(self._handle, ctypes.byref(header), ctypes.sizeof(header))
         self._headers.clear()

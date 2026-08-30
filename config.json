@@ -56,7 +56,8 @@
     "idle_unload_minutes_ac": 15,
     "idle_unload_minutes_battery": 15,
     "idle_exit_minutes_ac": 15,
-    "idle_exit_minutes_battery": 15
+    "idle_exit_minutes_battery": 15,
+    "finalize_timeout_s": 30
   },
   "output": {
     "marker_open": "~",

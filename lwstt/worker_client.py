@@ -37,6 +37,9 @@ class WorkerClient:
         self._reader: threading.Thread | None = None
         self._stderr_pump: threading.Thread | None = None
         self._write_lock = threading.Lock()
+        # Set when a write fails part-way. Anything sent afterwards would be
+        # read as a continuation of the half-written frame.
+        self._stream_broken = False
         self.last_activity = time.monotonic()
         self.models_loaded = False
 
@@ -62,6 +65,7 @@ class WorkerClient:
             cwd=str(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         )
+        self._stream_broken = False
         self._reader = threading.Thread(target=self._read_loop, name="lwstt-worker-out", daemon=True)
         self._reader.start()
         self._stderr_pump = threading.Thread(
@@ -72,17 +76,24 @@ class WorkerClient:
 
     def stop(self, timeout: float = 3.0) -> None:
         """Ask politely, then insist."""
-        if not self.alive:
-            self._process = None
+        process = self._process
+        if process is None or process.poll() is not None:
+            with self._write_lock:
+                self._process = None
+            self.models_loaded = False
             return
         try:
             self._send(Msg.SHUTDOWN)
-            self._process.wait(timeout=timeout)
+            process.wait(timeout=timeout)
         except Exception:
             pass
-        if self._process and self._process.poll() is None:
-            self._process.kill()
-        self._process = None
+        if process.poll() is None:
+            process.kill()
+        # Under the lock: a sender mid-write must not find _process swapped out
+        # from under it, nor start writing to a process that is being torn down.
+        with self._write_lock:
+            self._process = None
+            self._stream_broken = False
         self.models_loaded = False
 
     # -- io --------------------------------------------------------------
@@ -121,22 +132,44 @@ class WorkerClient:
         except Exception:
             pass
 
-    def _send(self, msg: Msg, payload: bytes = b"") -> bool:
-        if not self.alive or not self._process.stdin:
-            return False
-        try:
-            with self._write_lock:
-                self._process.stdin.write(encode(msg, payload))
-                self._process.stdin.flush()
+    def _write(self, framed: bytes) -> bool:
+        """The single path to the worker's stdin.
+
+        Everything is done under the lock, including looking up the process, so
+        a concurrent stop() cannot swap it out mid-frame. A failed write poisons
+        the stream rather than being retried: a write that fails part-way leaves
+        an incomplete frame in the pipe, and every byte sent after it is read as
+        a continuation of that frame. The worker then decodes raw PCM as a
+        header, hits a zero type byte, and dies -- observed in the wild as
+        "unknown message type 0".
+        """
+        with self._write_lock:
+            process = self._process
+            if process is None or process.poll() is not None or process.stdin is None:
+                return False
+            if self._stream_broken:
+                return False
+            try:
+                process.stdin.write(framed)
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                self._stream_broken = True
+                self._log(f"write failed, stream poisoned ({exc}); worker needs a restart")
+                return False
             self.last_activity = time.monotonic()
             return True
-        except (BrokenPipeError, OSError) as exc:
-            self._log(f"worker write failed: {exc}")
-            return False
+
+    def _send(self, msg: Msg, payload: bytes = b"") -> bool:
+        return self._write(encode(msg, payload))
 
     # -- protocol --------------------------------------------------------
 
     def start_dictation(self, settings: dict) -> bool:
+        # A poisoned stream cannot be recovered by writing to it; replace the
+        # process so the next dictation starts from a clean pipe.
+        if self._stream_broken:
+            self._log("restarting the worker: previous stream was poisoned")
+            self.stop()
         if not self.alive:
             self.start()
         try:
@@ -144,19 +177,9 @@ class WorkerClient:
         except Exception as exc:
             self._log(f"could not encode settings: {exc}")
             return False
-        return self._send_raw(payload)
+        return self._write(payload)
 
-    def _send_raw(self, framed: bytes) -> bool:
-        if not self.alive or not self._process.stdin:
-            return False
-        try:
-            with self._write_lock:
-                self._process.stdin.write(framed)
-                self._process.stdin.flush()
-            self.last_activity = time.monotonic()
-            return True
-        except (BrokenPipeError, OSError):
-            return False
+
 
     def send_audio(self, pcm: bytes) -> bool:
         if not pcm:
