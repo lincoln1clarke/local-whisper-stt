@@ -155,6 +155,32 @@ class Supervisor:
             )
         return False
 
+    def _end_dictation(self, reason: str) -> None:
+        """The single way a dictation ends. Always leaves the screen clean.
+
+        Order matters. set_listening(False) only removes the empty marker pair;
+        while provisional text is showing it is a no-op, because the wrap comes
+        from the provisional text rather than the listening flag. Clearing the
+        provisional text first is what makes the second call able to do
+        anything -- otherwise a preview that was never superseded by a commit
+        stays on screen with its tildes for good. That happens whenever the
+        final drain drops a silence-only tail: no commit is sent, so nothing
+        replaces the last preview.
+        """
+        self._emit(self.typing.abort)
+        self._emit(lambda: self.typing.set_listening(False))
+        # Committed text staying on screen is correct -- it is the finished
+        # dictation. Only markers are leftovers.
+        if self.typing.provisional or self.typing.listening:
+            self.log(
+                f"dictation ended with markers still on screen "
+                f"({self.typing.wrapped_provisional()!r}, {reason})"
+            )
+            self._defer_typing()
+        self._release_typing_state()
+        self.dictating = False
+        self._awaiting_done_since = None
+
     def _defer_typing(self) -> None:
         """Remember that output is owed to a window that is not focused now."""
         if self.typing.on_screen() or self.dictating:
@@ -238,12 +264,7 @@ class Supervisor:
                 else:
                     self._emit(self.typing.abort)
             elif msg is Msg.DONE:
-                # Drop the listening markers explicitly: reset() emits no edit,
-                # so they would otherwise be left behind on screen.
-                self._emit(lambda: self.typing.set_listening(False))
-                self.dictating = False
-                self._awaiting_done_since = None
-                self._release_typing_state()
+                self._end_dictation("done")
             elif msg is Msg.ERROR:
                 self.log(f"worker error: {obj.get('message')}")
                 if self.config.feedback.beep_on_error:
@@ -284,11 +305,7 @@ class Supervisor:
         with self._lock:
             if not self.dictating:
                 return
-            self._emit(lambda: self.typing.set_listening(False))
-            self._emit(self.typing.abort)
-            self._release_typing_state()
-            self.dictating = False
-            self._awaiting_done_since = None
+            self._end_dictation(f"cancelled: {reason}")
             self.worker.abort()
             self.log(f"cancelled pending output: {reason}")
 
@@ -515,11 +532,7 @@ class Supervisor:
         and no explanation, and keeps committed text, which is already final.
         """
         with self._lock:
-            self._emit(lambda: self.typing.set_listening(False))
-            self._emit(self.typing.abort)
-            self._release_typing_state()
-            self.dictating = False
-            self._awaiting_done_since = None
+            self._end_dictation(f"no worker: {reason}")
             self.log(f"finished without the worker: {reason}")
             if self.config.feedback.beep_on_error:
                 beep(*ERROR_TONE)

@@ -246,3 +246,73 @@ class TestStrandedByFocusChange:
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "more"})
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "more still"})
         assert sum(m.startswith("focus moved") for m in messages) == 1
+
+
+class TestDictationAlwaysEndsClean:
+    """The screen must be empty of markers however a dictation ends.
+
+    The specific hole: set_listening(False) only removes the *empty* marker
+    pair. While provisional text is showing, the wrap comes from the text rather
+    than the listening flag, so the call is a no-op and the preview stays on
+    screen with its tildes. It happens whenever the worker's final drain finds
+    only silence -- no commit is sent, so nothing supersedes the last preview.
+    """
+
+    def test_done_clears_a_preview_that_was_never_committed(self, sup):
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "never committed"})
+        assert sup.typing.on_screen() != ""
+        sup._on_worker_message(Msg.DONE, {"session": sup.session, "text": ""})
+        assert sup.typing.on_screen() == "", "the preview and its tildes must go"
+
+    def test_done_clears_the_bare_listening_markers(self, sup):
+        _run_to_threshold(sup)
+        assert "~~" in sup.typing.on_screen()
+        sup._on_worker_message(Msg.DONE, {"session": sup.session, "text": ""})
+        assert sup.typing.on_screen() == ""
+
+    def test_done_keeps_committed_text(self, sup):
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Kept."})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "dropped"})
+        sup._on_worker_message(Msg.DONE, {"session": sup.session, "text": "Kept."})
+        assert sup.typing.on_screen() == ""
+        assert not sup.dictating
+
+    def test_cancel_clears_a_preview(self, sup):
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "half a thought"})
+        sup.cancel_pending("user typed")
+        assert sup.typing.on_screen() == ""
+
+    def test_finish_locally_clears_a_preview(self, sup):
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "half a thought"})
+        sup._finish_locally("worker exited")
+        assert sup.typing.on_screen() == ""
+
+    def test_leftovers_are_logged_and_scheduled_for_cleanup(self, sup, monkeypatch):
+        """If the invariant ever fails, say so rather than leaving it on screen."""
+        import lwstt.supervisor as module
+
+        messages = []
+        sup.log = messages.append
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "stuck"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 99999)
+        sup._on_worker_message(Msg.DONE, {"session": sup.session, "text": ""})
+        assert any("still on screen" in m for m in messages)
+        assert sup._cleanup_hwnd == 12345, "and it must be queued for cleanup"
+
+    def test_every_ending_leaves_dictating_false(self, sup):
+        for ending in ("done", "cancel", "local"):
+            _run_to_threshold(sup)
+            sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "x"})
+            if ending == "done":
+                sup._on_worker_message(Msg.DONE, {"session": sup.session, "text": ""})
+            elif ending == "cancel":
+                sup.cancel_pending("user typed")
+            else:
+                sup._finish_locally("worker exited")
+            assert not sup.dictating, ending
+            assert sup.typing.on_screen() == "", ending
