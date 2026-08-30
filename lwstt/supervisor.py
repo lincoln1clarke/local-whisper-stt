@@ -33,7 +33,7 @@ from .win.system import (
 
 AUDIO_PUMP_INTERVAL = 0.05
 # How long to keep trying to clean markers stranded by a focus change.
-CLEANUP_GRACE_S = 30.0
+CLEANUP_GRACE_S = 120.0
 IDLE_CHECK_INTERVAL = 5.0
 
 
@@ -66,6 +66,7 @@ class Supervisor:
         self.session = 0
         self._last_revision = 0.0
         self._aborted_this_press = False
+        self._focus_warned = False
         self._awaiting_done_since: float | None = None
         self._cleanup_hwnd = 0
         self._cleanup_deadline = 0.0
@@ -133,15 +134,11 @@ class Supervisor:
     # -- typing ----------------------------------------------------------
 
     def _focus_intact(self) -> bool:
-        """Never backspace into a document the earlier characters never entered.
+        """Whether the window these characters went into still has the keyboard.
 
-        A *transient* loss of foreground is not a focus change. Windows reports
-        no foreground window at all during app switching, while a menu opens, or
-        as one window is torn down before the next is raised. Treating that
-        blink as a real change aborts a dictation the user is still speaking --
-        and because they are still holding the keys, the rest of the press then
-        goes nowhere and the whole thing is discarded on release. That is the
-        "it just stops working after I switch apps" failure.
+        Windows reports no foreground window at all during app switching, while
+        a menu opens, or as one window is torn down before the next is raised,
+        so a null handle is treated as a blink rather than a change.
         """
         current = foreground_window()
         if current == self.target_hwnd:
@@ -150,31 +147,28 @@ class Supervisor:
             # No foreground window right now. Nothing to type into and nothing
             # to be confused about; wait for it to come back.
             return True
-        if not self._aborted_this_press:
+        if not self._focus_warned:
+            self._focus_warned = True
             self.log(
-                f"focus changed ({window_title(self.target_hwnd)!r} [{self.target_hwnd}]"
-                f" -> {window_title(current)!r} [{current}]); aborting"
+                f"focus moved ({window_title(self.target_hwnd)!r} [{self.target_hwnd}]"
+                f" -> {window_title(current)!r} [{current}]); holding output"
             )
         return False
 
-    def _apply(self, edit) -> bool:
-        """Type an edit that has *already* been applied to the typing state.
+    def _defer_typing(self) -> None:
+        """Remember that output is owed to a window that is not focused now."""
+        if self.typing.on_screen() or self.dictating:
+            self._cleanup_hwnd = self.target_hwnd
+            self._cleanup_deadline = time.monotonic() + CLEANUP_GRACE_S
 
-        Callers mutate the state first and hand the resulting edit here, so a
-        refusal leaves the state describing a screen that was never written.
-        Prefer :meth:`_emit`, which checks first and mutates second.
+    def _release_typing_state(self) -> None:
+        """Forget the on-screen state -- unless a cleanup still needs it.
+
+        Resetting while a deferred cleanup is pending destroys the only record
+        of what was left on screen, which is what stranded the markers for good.
         """
-        if edit.is_noop:
-            return True
-        if not self._focus_intact():
-            self.abort(reason="focus changed", restore=False)
-            return False
-        try:
-            sendinput.apply_edit(edit.backspaces, edit.text)
-        except OSError as exc:
-            self.log(f"typing failed: {exc}")
-            return False
-        return True
+        if not self._cleanup_hwnd:
+            self.typing.reset()
 
     def _type_edit(self, edit) -> bool:
         """Type an edit whose target has already been verified by the caller."""
@@ -190,12 +184,19 @@ class Supervisor:
     def _emit(self, mutate) -> bool:
         """Check the target is still ours, *then* mutate and type.
 
-        The order matters: the typing state records what is on screen, so
-        mutating it for an edit that is then refused makes every later edit
-        wrong -- the counts stop describing the document.
+        The order matters twice over. The typing state records what is on
+        screen, so mutating it for an edit that is then refused makes every
+        later edit wrong -- the counts stop describing the document. And because
+        nothing is mutated when the check fails, state and screen stay in step,
+        so typing simply resumes where it left off if focus comes back.
+
+        A focus change no longer aborts. Windows hands focus around for all
+        sorts of momentary reasons -- a tooltip, a trackpad tap, another app
+        blinking to the front -- and killing a dictation the user is still
+        speaking is far worse than pausing its output for a moment.
         """
         if not self._focus_intact():
-            self.abort(reason="focus changed", restore=False)
+            self._defer_typing()
             return False
         edit = mutate()
         if edit.is_noop:
@@ -242,7 +243,7 @@ class Supervisor:
                 self._emit(lambda: self.typing.set_listening(False))
                 self.dictating = False
                 self._awaiting_done_since = None
-                self.typing.reset()
+                self._release_typing_state()
             elif msg is Msg.ERROR:
                 self.log(f"worker error: {obj.get('message')}")
                 if self.config.feedback.beep_on_error:
@@ -285,7 +286,7 @@ class Supervisor:
                 return
             self._emit(lambda: self.typing.set_listening(False))
             self._emit(self.typing.abort)
-            self.typing.reset()
+            self._release_typing_state()
             self.dictating = False
             self._awaiting_done_since = None
             self.worker.abort()
@@ -349,10 +350,16 @@ class Supervisor:
                 return
             if foreground_window() != self._cleanup_hwnd:
                 return
+            self._cleanup_hwnd = 0
+            if self.dictating:
+                # Still speaking. Typing resumes on its own from the state that
+                # was never mutated while focus was away; nothing to clean.
+                self._focus_warned = False
+                self.log("focus returned; resuming output")
+                return
             self._type_edit(self.typing.set_listening(False))
             self._type_edit(self.typing.abort())
             self.typing.reset()
-            self._cleanup_hwnd = 0
             self.log("cleared markers stranded by a focus change")
 
     def _signal_loop(self) -> None:
@@ -363,9 +370,7 @@ class Supervisor:
                 self._try_deferred_cleanup()
                 continue
             try:
-                if signal == "cancel":
-                    self.cancel_pending("user started typing")
-                elif signal is Signal.ARM:
+                if signal is Signal.ARM:
                     self._arm()
                 elif signal is Signal.DISARM:
                     self._disarm()
@@ -382,6 +387,7 @@ class Supervisor:
             self._awaiting_done_since = None
             self.session += 1
             self._aborted_this_press = False
+            self._focus_warned = False
             # Measured from arming, so the very first reword is rate-limited
             # like any other rather than passing for free.
             self._last_revision = time.monotonic()
@@ -511,7 +517,7 @@ class Supervisor:
         with self._lock:
             self._emit(lambda: self.typing.set_listening(False))
             self._emit(self.typing.abort)
-            self.typing.reset()
+            self._release_typing_state()
             self.dictating = False
             self._awaiting_done_since = None
             self.log(f"finished without the worker: {reason}")

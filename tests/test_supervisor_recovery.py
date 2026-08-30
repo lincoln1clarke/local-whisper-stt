@@ -176,6 +176,12 @@ class TestStrandedByFocusChange:
         sup._try_deferred_cleanup()
         assert sup.typed == [], "must not backspace into someone else's document"
 
+    def test_the_dictation_is_not_aborted(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        assert sup.dictating, "a focus change must not end a dictation in progress"
+
     def test_the_stranded_markers_are_remembered(self, sup, monkeypatch):
         import lwstt.supervisor as module
 
@@ -183,10 +189,24 @@ class TestStrandedByFocusChange:
         assert sup._cleanup_hwnd == 12345
         assert sup.typing.on_screen() != "", "state must survive to describe the cleanup"
 
-    def test_cleanup_runs_when_focus_returns(self, sup, monkeypatch):
+    def test_focus_returning_mid_dictation_just_resumes(self, sup, monkeypatch):
         import lwstt.supervisor as module
 
         self._strand(sup, module, monkeypatch)
+        sup.typed.clear()
+        monkeypatch.setattr(module, "foreground_window", lambda: 12345)
+        sup._try_deferred_cleanup()
+        assert sup._cleanup_hwnd == 0
+        assert sup.typing.on_screen() != "", "still speaking: nothing to clean up"
+        assert sup.typed == []
+
+    def test_cleanup_runs_when_focus_returns_after_the_dictation_ended(
+        self, sup, monkeypatch
+    ):
+        import lwstt.supervisor as module
+
+        self._strand(sup, module, monkeypatch)
+        sup.dictating = False  # keys released while focus was away
         sup.typed.clear()
         monkeypatch.setattr(module, "foreground_window", lambda: 12345)
         sup._try_deferred_cleanup()
@@ -224,6 +244,5 @@ class TestStrandedByFocusChange:
         sup.log = messages.append
         self._strand(sup, module, monkeypatch)
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "more"})
-        # "aborted: focus changed" also contains the phrase; count the
-        # diagnostic line itself, which is the noisy one.
-        assert sum(m.startswith("focus changed") for m in messages) == 1
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "more still"})
+        assert sum(m.startswith("focus moved") for m in messages) == 1

@@ -22,3 +22,6 @@ uses the everyday word before committing to such an entry.
 - Claude
 - Git
 - SQLAlchemy
+- Grep
+- prose
+- markdown

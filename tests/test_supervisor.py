@@ -201,7 +201,10 @@ class TestTyping:
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "late"})
         assert sup.typed == []
 
-    def test_focus_change_aborts_instead_of_typing(self, sup, monkeypatch):
+    def test_focus_change_holds_output_without_aborting(self, sup, monkeypatch):
+        """Windows hands focus around for momentary reasons -- a tooltip, a
+        trackpad tap, another app blinking to the front. Killing a dictation the
+        user is still speaking is far worse than pausing its output."""
         import lwstt.supervisor as module
 
         sup._arm()
@@ -210,7 +213,24 @@ class TestTyping:
         sup.typed.clear()
         monkeypatch.setattr(module, "foreground_window", lambda: 99999)
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
-        assert not sup.dictating, "a focus change must abort the dictation"
+        assert sup.dictating, "the dictation must survive a focus change"
+        assert sup.typed == [], "but nothing may be typed into the other window"
+
+    def test_output_resumes_where_it_left_off(self, sup, monkeypatch):
+        """Nothing is mutated while focus is away, so state and screen stay in
+        step and typing simply catches up."""
+        import lwstt.supervisor as module
+
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 99999)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
+        monkeypatch.setattr(module, "foreground_window", lambda: 12345)
+        sup.typed.clear()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there world"})
+        assert sup.typed != []
+        assert sup.typing.on_screen() == " ~hello there world~"
 
 
 class TestAbort:
@@ -467,15 +487,17 @@ class TestTransientFocusLoss:
         assert sup.typed != []
         assert sup.dictating
 
-    def test_a_real_different_window_still_aborts(self, sup, monkeypatch):
+    def test_a_real_different_window_holds_output(self, sup, monkeypatch):
         import lwstt.supervisor as module
 
         sup._arm()
         sup.dictating = True
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        sup.typed.clear()
         monkeypatch.setattr(module, "foreground_window", lambda: 99999)
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello there"})
-        assert not sup.dictating, "a genuine focus change must still abort"
+        assert sup.typed == [], "must never type into a different document"
+        assert sup._cleanup_hwnd == 12345, "the owed output must be remembered"
 
     def test_release_after_an_abort_is_reported_as_such(self, sup):
         messages = []
