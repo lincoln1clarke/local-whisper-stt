@@ -153,11 +153,37 @@ class Supervisor:
         return False
 
     def _apply(self, edit) -> bool:
+        """Type an edit that has *already* been applied to the typing state.
+
+        Callers mutate the state first and hand the resulting edit here, so a
+        refusal leaves the state describing a screen that was never written.
+        Prefer :meth:`_emit`, which checks first and mutates second.
+        """
         if edit.is_noop:
             return True
         if not self._focus_intact():
             self.abort(reason="focus changed", restore=False)
             return False
+        try:
+            sendinput.apply_edit(edit.backspaces, edit.text)
+        except OSError as exc:
+            self.log(f"typing failed: {exc}")
+            return False
+        return True
+
+    def _emit(self, mutate) -> bool:
+        """Check the target is still ours, *then* mutate and type.
+
+        The order matters: the typing state records what is on screen, so
+        mutating it for an edit that is then refused makes every later edit
+        wrong -- the counts stop describing the document.
+        """
+        if not self._focus_intact():
+            self.abort(reason="focus changed", restore=False)
+            return False
+        edit = mutate()
+        if edit.is_noop:
+            return True
         try:
             sendinput.apply_edit(edit.backspaces, edit.text)
         except OSError as exc:
@@ -189,15 +215,15 @@ class Supervisor:
             elif msg is Msg.COMMIT:
                 text = obj.get("text", "")
                 if text:
-                    self._apply(self.typing.commit(text))
+                    self._emit(lambda: self.typing.commit(text))
                     if self.config.feedback.beep_on_commit:
                         beep(*COMMIT_TONE)
                 else:
-                    self._apply(self.typing.abort())
+                    self._emit(self.typing.abort)
             elif msg is Msg.DONE:
                 # Drop the listening markers explicitly: reset() emits no edit,
                 # so they would otherwise be left behind on screen.
-                self._apply(self.typing.set_listening(False))
+                self._emit(lambda: self.typing.set_listening(False))
                 self.dictating = False
                 self._awaiting_done_since = None
                 self.typing.reset()
@@ -227,22 +253,25 @@ class Supervisor:
             if now - self._last_revision < interval:
                 return
             self._last_revision = now
-        self._apply(self.typing.set_provisional(text))
+        self._emit(lambda: self.typing.set_provisional(text))
 
     def cancel_pending(self, reason: str) -> None:
-        """Stop producing output, without touching what is on screen.
+        """Stop producing output for a dictation that is still finishing.
 
-        Used when the user starts typing while a dictation is still finishing.
-        Their characters have already landed, so the character count this
-        program was tracking no longer describes the document -- backspacing
-        against it would eat their text. Abandon the tracking instead.
+        The markers are removed here rather than abandoned. This runs from the
+        keyboard hook, which fires *before* the keystroke reaches the target, so
+        at this moment the screen still matches the typing state exactly and the
+        backspace count is still correct. Leaving them behind was the "tildes
+        just stay there" complaint; committed text is kept, as always.
         """
         with self._lock:
             if not self.dictating:
                 return
+            self._emit(lambda: self.typing.set_listening(False))
+            self._emit(self.typing.abort)
+            self.typing.reset()
             self.dictating = False
             self._awaiting_done_since = None
-            self.typing.reset()
             self.worker.abort()
             self.log(f"cancelled pending output: {reason}")
 
@@ -263,10 +292,16 @@ class Supervisor:
         a lock the audio pump might be holding.
         """
         if is_down and not self.machine.armed and self.dictating:
-            # Invalidate in-flight replies immediately: the signal thread
-            # may not run before the next worker message arrives.
+            # Synchronously, not via the signal thread: the hook is called
+            # before the keystroke is delivered, so backspaces injected here are
+            # queued ahead of it and the screen still matches our state. Handing
+            # this to another thread loses that ordering, and the markers get
+            # stranded behind the user's own text.
             self.session += 1
-            self._signals.put("cancel")
+            try:
+                self.cancel_pending("user started typing")
+            except Exception as exc:
+                self.log(f"cancel failed: {exc}")
 
         decision = self.machine.on_key(vk, is_down)
 
@@ -405,7 +440,7 @@ class Supervisor:
                 self.dictating = True
                 self.worker.start_dictation(self.worker_settings())
                 if self.config.output.show_listening_markers:
-                    self._apply(self.typing.set_listening(True))
+                    self._emit(lambda: self.typing.set_listening(True))
             data = recorder.read_available()
             if data:
                 self.worker.send_audio(data)
@@ -432,8 +467,8 @@ class Supervisor:
         and no explanation, and keeps committed text, which is already final.
         """
         with self._lock:
-            self._apply(self.typing.set_listening(False))
-            self._apply(self.typing.abort())
+            self._emit(lambda: self.typing.set_listening(False))
+            self._emit(self.typing.abort)
             self.typing.reset()
             self.dictating = False
             self._awaiting_done_since = None

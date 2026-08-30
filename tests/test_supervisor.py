@@ -345,15 +345,36 @@ class TestCancelOnTyping:
         assert sup.typed == []
         assert not sup.dictating
 
-    def test_cancel_does_not_backspace(self, sup):
-        """The user's own characters have landed; our count no longer describes
-        the document, so backspacing against it would eat their text."""
+    def test_cancel_removes_the_markers(self, sup):
+        """Runs from the keyboard hook, before the keystroke reaches the target,
+        so the screen still matches our state and the count is still correct.
+
+        Leaving them was the "tildes just stay there" complaint."""
         sup._arm()
         sup.dictating = True
         sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "draft"})
         sup.typed.clear()
         sup.cancel_pending("user typed")
-        assert sup.typed == []
+        assert sup.typed != [], "provisional text must be cleared, not abandoned"
+        assert sup.typing.on_screen() == ""
+
+    def test_cancel_keeps_committed_text(self, sup):
+        sup._arm()
+        sup.dictating = True
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Kept."})
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "draft"})
+        sup.typed.clear()
+        sup.cancel_pending("user typed")
+        # Only the provisional tail and its markers come off.
+        assert all(e.backspaces <= len(" ~draft~") for e in sup.typed)
+
+    def test_cancel_leaves_no_listening_markers(self, sup):
+        sup._arm()
+        sup.armed_at -= 10
+        sup._pump_once()
+        assert "~~" in sup.typing.on_screen()
+        sup.cancel_pending("user typed")
+        assert sup.typing.on_screen() == ""
 
     def test_cancel_tells_the_worker(self, sup):
         sup._arm()
