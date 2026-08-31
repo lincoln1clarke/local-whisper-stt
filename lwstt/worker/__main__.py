@@ -35,6 +35,11 @@ from . import asr, audio_log
 
 BYTES_PER_SAMPLE = 2
 PROCESS_INTERVAL = 0.1  # how often VAD + chunk decisions run
+# How long to hold shutdown open for a dictation log still being written.
+# Encoding costs ~1 s per five minutes of speech, so this covers any plausible
+# dictation. It must stay below the supervisor's patience in WorkerClient.stop,
+# or the process gets killed mid-write and the recording is lost anyway.
+LOG_DRAIN_TIMEOUT_S = 10.0
 # VAD boundaries are unpadded (see asr.speech_segments), so extend the cut a
 # little to avoid clipping the tail of the last word.
 CUT_PAD_S = 0.25
@@ -285,24 +290,53 @@ class Worker:
 
     # -- logging ---------------------------------------------------------
 
-    def write_log(self) -> None:
+    def spawn_log(self) -> None:
+        """Write this dictation's log on a background thread.
+
+        Takes its own snapshot of the audio, since reset_dictation clears the
+        buffer as soon as this returns.
+        """
         log_cfg = self.settings.get("logging", {})
         if not log_cfg.get("enabled", True) or not self.all_pcm:
             return
+        pcm = bytes(self.all_pcm)
+        segments = list(self.segments_log)
+        text = " ".join(self.committed)
+        settings = {k: v for k, v in self.settings.items() if not k.startswith("_")}
+        thread = threading.Thread(
+            target=self.write_log,
+            args=(pcm, segments, text, settings),
+            name="lwstt-worker-log",
+            daemon=True,
+        )
+        self._log_threads = [t for t in getattr(self, "_log_threads", []) if t.is_alive()]
+        self._log_threads.append(thread)
+        thread.start()
+
+    def finish_logs(self, timeout: float = 30.0) -> None:
+        """Wait for in-flight log writes, up to ``timeout`` in total."""
+        deadline = time.monotonic() + timeout
+        for thread in getattr(self, "_log_threads", []):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log("gave up waiting for a dictation log to finish writing")
+                return
+            thread.join(remaining)
+
+    def write_log(self, pcm, segments, text, settings) -> None:
+        log_cfg = self.settings.get("logging", {})
         try:
             day, stem = audio_log.dictation_paths(log_cfg.get("dir", "logs"))
             wav_path = day / f"{stem}.wav"
-            audio_log.write_wav(wav_path, bytes(self.all_pcm), self.sample_rate)
+            audio_log.write_wav(wav_path, pcm, self.sample_rate)
             audio_log.write_metadata(
                 day / f"{stem}.json",
                 {
                     "recorded_at": datetime.now().isoformat(timespec="seconds"),
-                    "duration_s": round(self.seconds(self.all_pcm), 3),
-                    "text": " ".join(self.committed),
-                    "segments": self.segments_log,
-                    "settings": {
-                        k: v for k, v in self.settings.items() if not k.startswith("_")
-                    },
+                    "duration_s": round(self.seconds(pcm), 3),
+                    "text": text,
+                    "segments": segments,
+                    "settings": settings,
                 },
             )
             if log_cfg.get("format", "opus") == "opus":
@@ -339,10 +373,15 @@ class Worker:
                 if len(self.open_pcm) == before:
                     break
                 guard += 1
-            self.write_log()
+            # DONE first, logging afterwards and off-thread. Writing the WAV
+            # and encoding it blocks for as long as the dictation was: ~0.3 s
+            # for 30 s of speech, ~2 s for ten minutes. Doing it before DONE
+            # left the markers on screen for that whole time, growing with the
+            # length of the dictation.
             self.send_json(
                 Msg.DONE, {"text": " ".join(self.committed), "session": self.session}
             )
+            self.spawn_log()
             self.reset_dictation()
 
         elif msg is Msg.ABORT:
@@ -390,15 +429,21 @@ class Worker:
 
 
 def main() -> int:
+    worker = Worker()
     try:
-        Worker().run()
+        worker.run()
     except KeyboardInterrupt:
         pass
+    # The log is written on a background thread now, so it can still be in
+    # flight. Those threads are daemons and os._exit below would take them with
+    # it, losing the recording of a dictation that was followed straight away by
+    # an eviction or a shutdown. Give them a bounded moment to land.
+    worker.finish_logs(timeout=LOG_DRAIN_TIMEOUT_S)
     # The reader thread is parked in a blocking read on stdin. Letting the
     # interpreter finalise around it produces "_enter_buffered_busy: could not
-    # acquire lock ... at interpreter shutdown" on stderr. There is nothing left
-    # to clean up -- the log is written on END and the OS reclaims the models --
-    # so leave immediately instead.
+    # acquire lock ... at interpreter shutdown" on stderr. Nothing else is left
+    # to clean up -- the logs were drained above and the OS reclaims the models
+    # -- so leave immediately instead.
     try:
         sys.stdout.buffer.flush()
         sys.stderr.flush()

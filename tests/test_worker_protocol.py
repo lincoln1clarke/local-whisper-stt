@@ -181,15 +181,32 @@ class TestFillerAndVocabulary:
         assert h.errors() == []
 
 
+def wait_for_log(log_dir, pattern="*.json", timeout=60):
+    """Wait for the dictation log to land.
+
+    Logging moved off the reply thread so DONE is not held up by the WAV write
+    and the Opus encode, which cost roughly a fifth of a second per minute of
+    speech. That makes the log asynchronous: DONE arriving no longer means the
+    files exist yet.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if log_dir.exists():
+            hits = [f for day in log_dir.iterdir() for f in day.glob(pattern)]
+            if hits:
+                return hits
+        time.sleep(0.05)
+    raise AssertionError(f"no {pattern} under {log_dir} within {timeout}s")
+
+
 class TestLogging:
     def test_a_dictation_is_logged_with_audio_and_metadata(self, tmp_path):
         with Harness(tmp_path) as h:
             h.dictate(read_pcm(FIXTURES / "simple.wav"))
+            metas = wait_for_log(tmp_path / "logs")
         days = list((tmp_path / "logs").iterdir())
         assert len(days) == 1
-        wavs = list(days[0].glob("*.wav"))
-        metas = list(days[0].glob("*.json"))
-        assert len(wavs) == 1 and len(metas) == 1
+        assert len(metas) == 1
         payload = json.loads(metas[0].read_text(encoding="utf-8"))
         assert "quick brown fox" in payload["text"].lower()
         assert payload["duration_s"] > 1
@@ -200,6 +217,7 @@ class TestLogging:
         with Harness(tmp_path) as h:
             h.settings["logging"] = {"enabled": False, "dir": str(tmp_path / "logs")}
             h.dictate(read_pcm(FIXTURES / "simple.wav"))
+        time.sleep(1.0)  # give an errant background write time to appear
         assert not (tmp_path / "logs").exists()
 
     def test_silence_is_still_logged_but_has_no_text(self, tmp_path):

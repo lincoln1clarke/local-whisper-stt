@@ -316,3 +316,60 @@ class TestDictationAlwaysEndsClean:
                 sup._finish_locally("worker exited")
             assert not sup.dictating, ending
             assert sup.typing.on_screen() == "", ending
+
+
+class TestMarkersDoNotOutliveThePress:
+    """The empty "~~" pair must vanish when the keys come up.
+
+    It means "listening". Once the keys are released nothing more is being
+    listened to and no further preview can arrive, so waiting for DONE to
+    remove it makes it hang around for however long the tail takes -- which is
+    exactly the stranded-tilde complaint. It goes at release instead, so no
+    delay downstream can strand it.
+    """
+
+    def test_release_clears_the_empty_pair(self, sup, monkeypatch):
+        import lwstt.supervisor as module
+
+        monkeypatch.setattr(module, "Recorder", TailRecorder)
+        _run_to_threshold(sup)
+        assert sup.typing.wrapped_provisional() == "~~", "markers never appeared"
+        sup._disarm()
+        assert sup.typing.wrapped_provisional() == "", "markers outlived the press"
+
+    def test_release_keeps_provisional_text(self, sup, monkeypatch):
+        """A preview still on screen is replaced by its commit, not deleted."""
+        import lwstt.supervisor as module
+
+        monkeypatch.setattr(module, "Recorder", TailRecorder)
+        _run_to_threshold(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"text": "half a thought", "session": sup.session})
+        sup._disarm()
+        assert sup.typing.provisional == "half a thought"
+
+    def test_a_late_done_still_ends_the_dictation(self, sup, monkeypatch):
+        """Clearing early must not leave the dictation half-open."""
+        import lwstt.supervisor as module
+
+        monkeypatch.setattr(module, "Recorder", TailRecorder)
+        _run_to_threshold(sup)
+        sup._disarm()
+        assert sup.dictating, "still waiting on the worker"
+        sup._on_worker_message(Msg.DONE, {"text": "hello", "session": sup.session})
+        assert not sup.dictating
+        assert sup.typing.wrapped_provisional() == ""
+
+
+class TestStaleDoneIsNotSilentlyDropped:
+    def test_a_stale_done_still_ends_the_dictation(self, sup, monkeypatch):
+        """Ignoring it outright left the dictation looking permanently unfinished."""
+        import lwstt.supervisor as module
+
+        monkeypatch.setattr(module, "Recorder", TailRecorder)
+        lines: list[str] = []
+        sup.log = lines.append
+        _run_to_threshold(sup)
+        sup._disarm()
+        sup._on_worker_message(Msg.DONE, {"text": "x", "session": sup.session - 1})
+        assert not sup.dictating
+        assert any("stale DONE" in line for line in lines)

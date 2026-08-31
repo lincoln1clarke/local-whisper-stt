@@ -54,10 +54,20 @@ def write_metadata(path: Path, payload: dict) -> Path:
 
 
 def encode_opus(wav_path: Path, bitrate_kbps: int = 24, delete_wav: bool = True) -> bool:
-    """Kick off a detached ffmpeg encode. Returns False if ffmpeg is unavailable."""
+    """Encode a WAV to Opus. Returns False if ffmpeg is unavailable.
+
+    This **blocks** for roughly a fifth of a second per minute of audio, so it
+    must never run on the path between the keys being released and the result
+    being typed. The worker calls it from a background thread.
+    """
     opus_path = wav_path.with_suffix(".opus")
     command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        # -nostdin, and DEVNULL below, are both load-bearing. This worker's
+        # stdin is the protocol pipe from the supervisor. A child inherits it,
+        # and ffmpeg reads stdin for interactive keys -- so without these it
+        # blocks until the 120 s timeout while eating framing bytes out of the
+        # pipe, which surfaced as a hung dictation and "unknown message type 0".
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(wav_path),
         "-c:a", "libopus", "-b:a", f"{bitrate_kbps}k",
         "-application", "voip",
@@ -66,6 +76,7 @@ def encode_opus(wav_path: Path, bitrate_kbps: int = 24, delete_wav: bool = True)
     try:
         completed = subprocess.run(
             command,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=120,
             creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,

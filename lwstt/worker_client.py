@@ -74,8 +74,14 @@ class WorkerClient:
         self._stderr_pump.start()
         self.last_activity = time.monotonic()
 
-    def stop(self, timeout: float = 3.0) -> None:
-        """Ask politely, then insist."""
+    def stop(self, timeout: float = 12.0) -> None:
+        """Ask politely, then insist.
+
+        The wait is generous because the worker flushes the dictation log on its
+        way out, and that encode can take a few seconds after a long dictation.
+        Killing it sooner would throw the recording away. Eviction after 15 idle
+        minutes returns immediately -- there is nothing left in flight by then.
+        """
         process = self._process
         if process is None or process.poll() is not None:
             with self._write_lock:

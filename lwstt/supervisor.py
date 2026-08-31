@@ -249,6 +249,14 @@ class Supervisor:
     def _on_worker_message(self, msg: Msg, obj: dict) -> None:
         with self._lock:
             if msg in (Msg.PREVIEW, Msg.COMMIT, Msg.DONE) and not self._is_current(obj):
+                if msg is Msg.DONE:
+                    # Dropping this leaves the dictation looking unfinished, so
+                    # it must never pass unnoticed.
+                    self.log(
+                        f"ignored a stale DONE (session {obj.get('session')} "
+                        f"!= {self.session})"
+                    )
+                    self._end_dictation("stale done")
                 return
             if msg in (Msg.PREVIEW, Msg.COMMIT) and not self.dictating:
                 return
@@ -453,6 +461,13 @@ class Supervisor:
                 return
             if tail:
                 self.worker.send_audio(tail)
+            # No further preview can arrive once the keys are up, so the empty
+            # marker pair has nothing left to indicate. Removing it here rather
+            # than waiting for DONE means a stray "~~" cannot outlive the press
+            # however the rest of the finish goes. Provisional *text* stays: a
+            # commit is still coming to replace it.
+            if not self.typing.provisional:
+                self._emit(lambda: self.typing.set_listening(False))
             if self.worker.end_dictation():
                 self._awaiting_done_since = time.monotonic()
             else:
