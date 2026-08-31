@@ -128,3 +128,36 @@ transcript with per-segment timestamps, for a possible future fine-tune.
 
 This means **anything you dictate is stored, in audio and in text**, including
 into a password field. `logging.enabled: false` turns it off.
+
+## Staying offline
+
+Nothing here needs the network: the models live in `%USERPROFILE%\ai-models\`
+and every pass runs locally. `tools\firewall.ps1`, run from an elevated
+PowerShell, makes that structural rather than a promise -- it blocks this venv's
+`python.exe` and `pythonw.exe` in both directions, so no dependency can send
+audio or transcripts anywhere, and faster-whisper cannot quietly re-download a
+model.
+
+```powershell
+.\tools\firewall.ps1                     # block
+.\tools\firewall.ps1 -Remove             # unblock
+Disable-NetFirewallRule -Group "Local Whisper STT"   # temporarily, e.g. for pip
+```
+
+While the rules are on, `pip` cannot install into this venv -- it runs through
+the same interpreter.
+
+One trap worth knowing, because it fails silently. A firewall rule matches the
+**image path of the running process**, and a uv-built venv's `python.exe` is a
+trampoline that re-execs the base interpreter: the process Windows actually sees
+is `C:\Program Files\Python313\pythonw.exe`, so rules naming the venv path look
+correct in the firewall UI and block nothing. The script refuses to run against a
+trampoline; `-ReplaceTrampolines` swaps in real interpreter copies, which is what
+stdlib `venv --copies` produces. Verify with:
+
+```powershell
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'app\.py' } |
+  Select-Object ProcessId, ExecutablePath
+```
+
+The path shown must be the one the rules name.
