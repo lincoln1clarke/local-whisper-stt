@@ -25,3 +25,4 @@ uses the everyday word before committing to such an entry.
 - Grep
 - prose
 - markdown
+- Kubernetes
