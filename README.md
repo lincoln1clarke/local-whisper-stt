@@ -171,3 +171,10 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'app\.py' }
 ```
 
 The path shown must be the one the rules name.
+
+## Licence
+
+Apache License 2.0 — see `LICENSE`. Use it commercially, fork it, ship it in a
+product; the only conditions are the usual ones of keeping the notice and
+stating what you changed. The licence also grants patent rights explicitly,
+which is the practical difference from MIT.
