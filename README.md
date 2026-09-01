@@ -174,6 +174,34 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'app\.py' }
 
 The path shown must be the one the rules name.
 
+## It does not work in apps running as administrator
+
+If the window you are typing into was started with "Run as administrator" and
+this app was not, **nothing happens at all** — no markers, no text, no beep, and
+nothing in `logs/app.log`. It looks like the app has crashed. It has not.
+
+That is Windows **UIPI** (User Interface Privilege Isolation). Every process has
+an integrity level, and a process at a lower level may not send input to one at
+a higher level. It is the rule that stops malware running as you from driving an
+elevated window or clicking its own UAC prompt. Because the block applies to the
+keyboard hook and not just to typing, the hotkey never fires in the first place,
+which is why the failure is silent rather than partial.
+
+Affected: elevated PowerShell or Terminal, Task Manager, Registry Editor, most
+installers, and any editor someone launched as administrator. Everything running
+normally is fine.
+
+**This is deliberate and will not be fixed.** Running the dictation app elevated
+would make it work, and it would also mean a permanent system-wide keyboard hook
+running as administrator, plus a UAC prompt at every logon. That is a far worse
+thing to have on a machine than one documented limitation. The legitimate
+bypass — `uiAccess="true"` in the manifest, which is how screen readers do it —
+needs the binary signed by a trusted CA *and* installed under `Program Files`,
+which does not fit a cloned repo.
+
+If you genuinely need it and accept the trade, the change is small and any
+coding agent can make it for you. Please read the paragraph above first.
+
 ## Licence
 
 Apache License 2.0 — see `LICENSE`. Use it commercially, fork it, ship it in a

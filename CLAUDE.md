@@ -112,6 +112,23 @@ subprocess and checking `sys.modules`.
 Models live in `%USERPROFILE%\ai-models\` and are loaded only by the worker,
 which is spawned on demand and evicted after 15 idle minutes.
 
+## A dead hotkey usually means the target is elevated
+
+If a bug report says the app does nothing at all — no markers, no text, nothing
+in `logs/app.log` — ask what window had focus before assuming a crash.
+
+Windows UIPI stops a process at one integrity level sending input to a higher
+one. The app runs non-elevated on purpose, so any window started with "Run as
+administrator" is unreachable. The block hits the keyboard hook, not just the
+typing, so `WH_KEYBOARD_LL` never sees the keys and nothing downstream runs.
+Silence, not a partial dictation, is the signature.
+
+Do not "fix" this by elevating the app. That trades a documented limitation for
+a permanent system-wide keyboard hook running as administrator. `uiAccess` in
+the manifest is the legitimate route and needs CA signing plus installation
+under `Program Files`, which a cloned repo cannot satisfy. The README explains
+this to users; keep the two in step.
+
 ## Tests
 
 ```
