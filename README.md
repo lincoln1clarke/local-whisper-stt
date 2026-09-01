@@ -13,7 +13,12 @@ pick models to match, and verify the result against the test suite. The install
 genuinely varies by machine (GPU vs CPU, VRAM, model choice), which is why it is
 a guide for an agent rather than a script.
 
-Windows only. See **Requirements** below.
+**Windows works out of the box. macOS needs a port, and an agent can do most of
+it.** Everything that touches the operating system lives in one place —
+`lwstt/win/`, about 1,100 lines — and the tests enforce that the rest stays free
+of it. The design, the chunker, the typing state machine and the worker protocol
+are all platform-neutral. See **Porting it to macOS** below and the porting
+section of `INSTALL.md`.
 
 ## Using it
 
@@ -127,8 +132,8 @@ Three classes of test are worth knowing about:
 
 ## Requirements
 
-- Windows, NVIDIA GPU with ~2 GB free VRAM on the default turbo-only setup
-  (~5 GB if `final_ac` is switched to `large-v3`)
+- Windows (macOS needs a port — see below), NVIDIA GPU with ~2 GB free VRAM on
+  the default turbo-only setup (~5 GB if `final_ac` is switched to `large-v3`)
 - Models in `%USERPROFILE%\ai-models\` (`faster-whisper-large-v3` and
   `faster-whisper-large-v3-turbo`)
 - `ffmpeg` on `PATH` for Opus log compression; without it logs stay as WAV
@@ -173,6 +178,41 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'app\.py' }
 ```
 
 The path shown must be the one the rules name.
+
+## Porting it to macOS
+
+Nothing in the design is Windows-specific; the implementation is. The split is
+already enforced by `tests/test_architecture.py`, which fails if `lwstt/core/`
+so much as imports `ctypes`:
+
+| | lines | portable? |
+|---|---|---|
+| `lwstt/core/`, `supervisor.py`, `worker_client.py`, `control.py` | ~1,970 | yes, unchanged |
+| `lwstt/win/` — hook, typing, audio, indicator, keys, system | ~1,070 | no, needs a `lwstt/mac/` twin |
+
+Only `supervisor.py` imports the platform layer, at five import lines. That is
+the whole seam.
+
+Two things genuinely differ and cannot be guessed for you:
+
+**The hardware.** A Mac almost certainly has no NVIDIA GPU, and CTranslate2 —
+what `faster-whisper` runs on — has no Metal backend, so the stack as shipped
+would run **CPU-only** on Apple Silicon. That works, but it leaves an M-series
+GPU and Neural Engine idle. On Apple Silicon the better move is usually to keep
+the architecture and swap the ASR backend for one that uses the hardware:
+`whisper.cpp` with Metal, MLX, or WhisperKit via CoreML. That is a change to
+`lwstt/worker/asr.py`, not to the design.
+
+**The hotkey.** Most Apple keyboards have no Right Ctrl, so the default chord
+does not exist. Right Option + Right Command is the natural equivalent; Fn is
+what several commercial tools use. This is a preference, so an agent should ask
+rather than pick.
+
+Also expect macOS to require **Accessibility** permission before a global hotkey
+or synthetic typing works at all — granted by hand in System Settings, not
+scriptable — and note that macOS **Secure Input** blocks event taps while a
+password field is focused, which is the Mac counterpart of the elevated-window
+limitation described below.
 
 ## It does not work in apps running as administrator
 

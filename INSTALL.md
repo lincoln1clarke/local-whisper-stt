@@ -40,10 +40,20 @@ Ask before each. Do not assume.
 
 ## Phase 1 — Check the platform
 
-This is **Windows-only** and not portable. It uses `WH_KEYBOARD_LL` for the
-hotkey, `SendInput` for typing, `winmm` for audio capture and Win32 for the
-recording indicator. If the user is on macOS or Linux, stop and tell them: this
-would need a new `lwstt/win/` layer, not a tweak.
+**On Windows, continue straight to Phase 2.** The app runs as shipped.
+
+**On macOS, this needs a port, and you can do most of it — go to "Porting to
+macOS" at the end of this file first, then come back.** Do not tell the user it
+is impossible. The platform-specific code is confined to `lwstt/win/` (~1,070
+lines) and is imported from exactly five lines in `supervisor.py`; everything
+else — the chunker, the diff, the typing state machine, the worker protocol, the
+config — is plain Python that runs anywhere, and `tests/test_architecture.py`
+already fails if `lwstt/core/` imports `ctypes` at all.
+
+**On Linux**, the same is true in principle and nobody has done it. The audio
+and typing layers differ again (PipeWire/ALSA, and X11 vs Wayland, where
+synthetic input is genuinely harder). Tell the user it is a bigger job than
+macOS and let them decide.
 
 Requires Python 3.11+ (developed on 3.13).
 
@@ -250,3 +260,105 @@ you the most time if you have not read it:
   pipe.
 - Text appearing late is worth measuring by replaying a real recording from
   `logs\`, not by reading code.
+
+---
+
+## Porting to macOS
+
+Read this before Phase 2 if the user is on a Mac. It deliberately does not
+prescribe an implementation — the right answers depend on their hardware and
+their keyboard, and you are better placed to work those out on the machine in
+front of you than this file is. What follows is the shape of the job and the
+decisions that are not yours to make.
+
+### What actually has to change
+
+Everything OS-specific is in `lwstt/win/`, imported from five lines in
+`supervisor.py`. Build a `lwstt/mac/` twin exposing the same names and redirect
+those imports. Nothing else should need to move.
+
+| File | Does | macOS counterpart to investigate |
+|---|---|---|
+| `hook.py` | global hotkey via `WH_KEYBOARD_LL` | `CGEventTap` |
+| `sendinput.py` | types Unicode via `SendInput` | `CGEventCreateKeyboardEvent` + `CGEventKeyboardSetUnicodeString` |
+| `audio.py` | 16 kHz mono capture via `winmm` | CoreAudio / AVAudioEngine |
+| `indicator.py` | the recording dot | a borderless `NSWindow`, or a status-bar item |
+| `keys.py` | virtual key codes | macOS keycodes |
+| `system.py` | focused window, battery, beep, single instance | `NSWorkspace`, IOKit, `NSSound` |
+
+Keep the constraint that makes the architecture work: the supervisor must stay
+**stdlib and ctypes only**. No numpy, no torch, nothing heavy — it is resident
+all day. `tests/test_architecture.py` enforces this and will tell you if a port
+breaks it. If a binding you reach for drags in a large dependency, that is a
+signal to use `ctypes` against the framework directly instead.
+
+### Decision 1 — the hardware. Do not just fall back to CPU.
+
+A Mac will almost certainly have no NVIDIA GPU, and this matters more than it
+first appears: **CTranslate2, which `faster-whisper` runs on, has no Metal
+backend.** Setting `device: "cpu"` will work, but on Apple Silicon it leaves the
+GPU and the Neural Engine completely idle, and the preview pass is the part that
+suffers.
+
+So on Apple Silicon, look at replacing the ASR backend rather than just the
+device string. That is `lwstt/worker/asr.py` — one module behind a small
+interface, not a redesign. Options worth checking, current at the time you read
+this:
+
+- **whisper.cpp** with Metal — closest in spirit, GGML models, well proven
+- **MLX / `mlx-whisper`** — Apple's own array framework, uses the GPU
+- **WhisperKit** — CoreML, can reach the Neural Engine
+- **faster-whisper on CPU** — the fallback, and genuinely fine on a fast M-series
+  chip for the final pass; it is the constant preview pass that hurts
+
+Work out what the machine actually has before choosing — chip generation, core
+counts, and unified memory size. Note that unified memory changes the sizing
+question entirely: there is no separate VRAM budget, so the model competes with
+everything else the user is running. Say what you found and what you picked, and
+let the user weigh accuracy against speed. `lwstt/worker/cuda.py` is
+NVIDIA-specific and simply will not be needed.
+
+Intel Macs: no Metal path worth having. CPU, and a smaller model.
+
+### Decision 2 — the hotkey. Ask; do not choose.
+
+Most Apple keyboards **have no Right Ctrl**, so the shipped chord cannot be
+typed. The requirement is a chord of modifiers the user does not otherwise
+press, comfortable to hold while speaking.
+
+Reasonable suggestions to offer: **Right Option + Right Command** (the closest
+analogue, and both exist on MacBook and Magic Keyboards), or **Fn**, which
+several commercial dictation tools use. Recommend one, then let them pick. The
+chord lives in `config.json` under `hotkey.keys`, but the key names must exist
+in the new `keys.py`.
+
+### Decision 3 — permissions, which the user must grant by hand
+
+macOS will not let you install a global hotkey or synthesise keystrokes until
+the app has **Accessibility** permission, in System Settings → Privacy &
+Security. Microphone access is a second, separate prompt. Neither can be
+scripted; you must tell the user to grant them, and the app will appear
+completely dead until they do — the same silent-failure signature as the
+elevated-window problem on Windows.
+
+One more to warn them about: while a password field is focused, macOS turns on
+**Secure Input**, which blocks event taps. The hotkey will stop working in that
+context and start again afterwards. That is the operating system protecting
+them, not a bug.
+
+### How you will know it worked
+
+The test suite is the acceptance criterion and most of it is platform-neutral,
+so it is a real check on a port rather than a formality. Three files touch the
+platform layer and will need attention: `tests/test_win_layer.py` (the bulk of
+it) and `tests/test_audio_capture.py` need macOS equivalents, and
+`test_configured_hotkey_resolves` in `tests/test_architecture.py` asserts the
+default chord resolves to the two Windows virtual key codes — update it to
+whatever chord Decision 2 settled on. Everything else should pass unchanged, and
+where it does not, the port has leaked platform detail somewhere it should not
+have.
+
+Watch `test_architecture.py` in particular. If it fails on imports rather than
+on that hotkey assertion, the port has pulled something heavy into the
+supervisor — fix that before going further, because it is the constraint the
+whole two-process design rests on.
