@@ -206,7 +206,7 @@ Tell the user: while these rules are on, `pip` cannot install into this venv.
 ## Phase 7 — Verify properly
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests\ -q            # 423, no GPU needed
+.\.venv\Scripts\python -m pytest tests\ -q            # 432, no GPU needed
 .\.venv\Scripts\python -m pytest tests\ -q -m slow    # 32, loads the real models
 ```
 

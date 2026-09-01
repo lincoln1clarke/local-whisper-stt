@@ -30,17 +30,20 @@ routing around them. Ask first — being offline is the point.
 
 **This is the part that fails silently, so read it before running any uv command.**
 
-A firewall rule matches the *image path of the running process*. This venv was
-built by uv (`uv = 0.11.14` in `.venv/pyvenv.cfg`), and uv's `python.exe` is a
-**trampoline** that re-execs the base interpreter. Under a trampoline the process
-Windows actually sees is `C:\Program Files\Python313\pythonw.exe`, so rules
-naming the venv path match nothing. They look completely correct in the firewall
-UI while blocking not one packet.
+A firewall rule matches the *image path of the running process*. uv builds a
+venv whose `python.exe` is a **trampoline** that re-execs the base interpreter,
+and under one of those the process Windows actually sees is the base install
+(e.g. `C:\Program Files\Python313\pythonw.exe`), so rules naming the venv path
+match nothing. They look completely correct in the firewall UI while blocking
+not one packet. Check `.venv/pyvenv.cfg` for a `uv =` line to see how yours was
+built.
 
-So `.venv\Scripts\python.exe` and `pythonw.exe` are now **real interpreter
-copies**, as stdlib `venv --copies` produces. The uv trampolines are kept beside
-them as `.uv-trampoline`. This is deliberate. Do not restore them, and do not
-recreate the venv with uv without redoing the swap.
+`.venv\Scripts\python.exe` and `pythonw.exe` must therefore be **real
+interpreter copies**, which is what stdlib `venv --copies` produces and what
+`INSTALL.md` tells you to create. Where a venv was built by uv instead, the
+trampolines are kept beside the copies as `.uv-trampoline`. That swap is
+deliberate. Do not restore them, and do not recreate the venv with uv without
+redoing it.
 
 `uv sync` and `uv pip install` may rewrite those two files back to trampolines.
 After any uv command that touches them, re-run:
@@ -112,7 +115,7 @@ which is spawned on demand and evicted after 15 idle minutes.
 ## Tests
 
 ```
-.venv\Scripts\python -m pytest tests\ -q            # 423 fast, no GPU
+.venv\Scripts\python -m pytest tests\ -q            # 432 fast, no GPU
 .venv\Scripts\python -m pytest tests\ -q -m slow    # 32, real models on the GPU
 ```
 
