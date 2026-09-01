@@ -55,12 +55,14 @@ Three files, edited directly. No settings window.
 | File | Purpose |
 |---|---|
 | `config.json` | everything |
-| `vocabulary.md` | terms to bias towards, **in priority order** (ships empty) |
+| `vocabulary.md` | terms to bias towards, **in priority order** (a template; copy to `vocabulary.local.md`) |
 | `filler.md` | words to strip from the final text |
 
-`vocabulary.md` ships **empty on purpose**. Hotwords are decoder context, and
+`vocabulary.md` ships as a **short generic template**, and a `vocabulary.local.md`
+beside it wins and is gitignored -- that is where your own project and client
+names belong. Keep the list short on purpose: hotwords are decoder context, and
 Whisper will sometimes emit them straight into its output when the audio is
-ambiguous -- so a term listed here can appear in your text even when you did not
+ambiguous, so a term listed here can appear in your text even when you did not
 say it. Only add words that are genuinely misrecognised often enough to be worth
 that. The preview pass ignores the list entirely; only the final pass is biased.
 
