@@ -18,10 +18,13 @@ from pathlib import Path
 import pytest
 
 from lwstt.core.chunker import Action, decide
+from lwstt.core.config import ModelsSection, expand_path
 from lwstt.core.textproc import normalize_newlines
 
 FIXTURES = Path(__file__).parent / "fixtures"
-MODEL_DIR = Path(r"%USERPROFILE%\ai-models")
+# Same source of truth as the app, so a machine that runs the app runs the
+# tests, and neither file names a user account.
+MODEL_DIR = expand_path(ModelsSection.dir)
 LARGE = MODEL_DIR / "faster-whisper-large-v3"
 TURBO = MODEL_DIR / "faster-whisper-large-v3-turbo"
 

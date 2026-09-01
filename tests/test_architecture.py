@@ -179,11 +179,14 @@ class TestPackagedDefaults:
 
     @pytest.mark.parametrize("name", ["preview", "final_ac", "final_battery"])
     def test_configured_models_exist_on_disk(self, name):
-        from lwstt.core.config import load_config
+        from lwstt.core.config import expand_path, load_config
 
         config, _ = load_config(ROOT / "config.json")
         path = Path(config.model_path(getattr(config.models, name)))
-        if not Path(config.models.dir).is_dir():
+        # expand_path, not Path: models.dir may be "~/ai-models", and an
+        # unexpanded "~" is a relative path that never exists, so the guard
+        # would skip the check on every machine instead of running it.
+        if not expand_path(config.models.dir).is_dir():
             pytest.skip("model directory not present")
         assert path.is_dir(), f"{name} points at a missing directory: {path}"
         assert (path / "model.bin").is_file()

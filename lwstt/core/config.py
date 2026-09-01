@@ -9,9 +9,21 @@ worse failure than running with a stale setting.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
+
+
+def expand_path(value: str) -> Path:
+    """Expand ~ and environment variables, so no config need name a user.
+
+    Windows paths are per-user by nature, and a config that hardcodes one only
+    works on the machine it was written on -- and discloses the account name to
+    anyone who reads it. "~/ai-models" and "%USERPROFILE%/ai-models" both mean
+    the right thing on every machine.
+    """
+    return Path(os.path.expandvars(value)).expanduser()
 
 
 class ConfigWarning(str):
@@ -33,7 +45,7 @@ class AudioSection:
 
 @dataclass
 class ModelsSection:
-    dir: str = r"~/ai-models"
+    dir: str = "~/ai-models"
     preview: str = "faster-whisper-large-v3-turbo"
     final_ac: str = "faster-whisper-large-v3-turbo"
     final_battery: str = "faster-whisper-large-v3-turbo"
@@ -164,12 +176,14 @@ class Config:
     def model_path(self, name: str) -> str:
         """Resolve a model name against models.dir.
 
-        An absolute path is returned untouched so a config can point anywhere.
+        Both halves are expanded, so either may use ~ or an environment
+        variable. An absolute path is returned untouched so a config can point
+        anywhere.
         """
-        p = Path(name)
+        p = expand_path(name)
         if p.is_absolute():
             return str(p)
-        return str(Path(self.models.dir) / name)
+        return str(expand_path(self.models.dir) / name)
 
 
 # Values that must be positive to make any sense.

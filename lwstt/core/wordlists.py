@@ -3,6 +3,10 @@
 vocabulary.md and filler.md are bullet lists. Lines starting with - or * are
 entries; everything else is free-form commentary, so the files document
 themselves. Order in vocabulary.md is priority.
+
+A "<name>.local.md" beside either file wins over it. That is how a personal
+vocabulary -- which tends to name employers, clients and projects -- stays out
+of version control while the tracked file remains a useful starting point.
 """
 
 from __future__ import annotations
@@ -32,9 +36,19 @@ def parse_markdown_list(text: str) -> list[str]:
     return entries
 
 
-def load_list(path: str | Path) -> list[str]:
-    """Read a word list. A missing or unreadable file is simply empty."""
+def local_override(path: str | Path) -> Path:
+    """Return the ".local" sibling of ``path`` if it exists, else ``path``.
+
+    vocabulary.md -> vocabulary.local.md
+    """
     p = Path(path)
+    sibling = p.with_name(f"{p.stem}.local{p.suffix}")
+    return sibling if sibling.exists() else p
+
+
+def load_list(path: str | Path) -> list[str]:
+    """Read a word list, preferring a .local sibling. Missing means empty."""
+    p = local_override(path)
     if not p.exists():
         return []
     try:

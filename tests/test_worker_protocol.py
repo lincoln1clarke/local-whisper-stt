@@ -15,12 +15,15 @@ from pathlib import Path
 
 import pytest
 
+from lwstt.core.config import ModelsSection, expand_path
 from lwstt.core.protocol import Msg
 from lwstt.worker_client import WorkerClient
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
-MODEL_DIR = Path(r"%USERPROFILE%\ai-models")
+# Same source of truth as the app, so a machine that runs the app runs the
+# tests, and neither file names a user account.
+MODEL_DIR = expand_path(ModelsSection.dir)
 
 pytestmark = [
     pytest.mark.slow,

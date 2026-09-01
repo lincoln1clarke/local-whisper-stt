@@ -10,6 +10,11 @@ Anything that is not a `-` bullet is commentary and is ignored, so notes like
 this one are free. The list is re-read at the start of every dictation, so an
 edit takes effect on the next thing you say — no restart.
 
+**Make this yours.** Copy it to `vocabulary.local.md` and edit that instead.
+The `.local.md` file wins over this one and is gitignored, so your employer,
+client and project names never reach version control. The same applies to
+`filler.md`.
+
 **What makes a good entry.** Distinctive words with no common English
 near-match: project names, surnames, library names. `SQLAlchemy` is the ideal
 case — without it Whisper splits the word into "SQL Alchemy".
@@ -21,8 +26,9 @@ uses the everyday word before committing to such an entry.
 
 - Claude
 - Git
-- SQLAlchemy
 - Grep
 - prose
 - markdown
+- SQLAlchemy
+- PyTorch
 - Kubernetes

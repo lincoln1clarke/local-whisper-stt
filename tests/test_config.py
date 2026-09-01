@@ -8,10 +8,13 @@ and simply does nothing.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from lwstt.core.config import Config, config_from_dict, load_config
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def cfg(data):
@@ -196,3 +199,44 @@ class TestModelPath:
     def test_absolute_path_is_left_alone(self):
         c, _ = cfg({"models": {"dir": "C:/models"}})
         assert c.model_path("D:/elsewhere/model").replace("\\", "/") == "D:/elsewhere/model"
+
+
+class TestPathsNameNoUser:
+    """A config that hardcodes a user account only works on one machine.
+
+    It also discloses the account name to anyone who reads the repo, which is
+    why the default is written with ~ and expanded at use.
+    """
+
+    def test_the_default_model_dir_names_nobody(self):
+        from lwstt.core.config import ModelsSection
+
+        assert "Users" not in ModelsSection.dir
+        assert ModelsSection.dir.startswith("~")
+
+    def test_tilde_expands(self):
+        from lwstt.core.config import Config, expand_path
+
+        config = Config()
+        resolved = Path(config.model_path("some-model"))
+        assert resolved.is_absolute()
+        assert resolved == expand_path("~") / "ai-models" / "some-model"
+
+    def test_environment_variables_expand(self, monkeypatch):
+        from lwstt.core.config import Config
+
+        monkeypatch.setenv("LWSTT_TEST_ROOT", str(Path.home() / "elsewhere"))
+        config = Config()
+        config.models.dir = "%LWSTT_TEST_ROOT%/models"
+        assert "elsewhere" in config.model_path("m")
+        assert "%" not in config.model_path("m")
+
+    def test_an_absolute_path_is_left_alone(self):
+        from lwstt.core.config import Config
+
+        config = Config()
+        assert config.model_path(r"D:\models\x") == r"D:\models\x"
+
+    def test_the_shipped_config_names_nobody(self):
+        text = (ROOT / "config.json").read_text(encoding="utf-8")
+        assert "Users" not in text

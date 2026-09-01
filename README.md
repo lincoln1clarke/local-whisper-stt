@@ -5,6 +5,16 @@ release, and the text is typed into whatever has focus. Nothing leaves the machi
 
 See [PLAN.md](PLAN.md) for the design and the reasoning behind every decision.
 
+## Installing it
+
+`INSTALL.md` is written for a coding agent. Clone this repo, open it with one,
+and say *"install this by following INSTALL.md"* — it will detect your hardware,
+pick models to match, and verify the result against the test suite. The install
+genuinely varies by machine (GPU vs CPU, VRAM, model choice), which is why it is
+a guide for an agent rather than a script.
+
+Windows only. See **Requirements** below.
+
 ## Using it
 
 Hold both keys and talk. An empty `~~` appears as soon as the hold threshold

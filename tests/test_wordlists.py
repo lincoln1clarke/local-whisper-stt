@@ -194,3 +194,39 @@ class TestApproxTokenCount:
     @given(st.text(max_size=200))
     def test_never_negative(self, text):
         assert approx_token_count(text) >= 1
+
+
+class TestLocalOverride:
+    """A personal vocabulary names employers, clients and projects.
+
+    It has to stay out of version control while the tracked file remains a
+    useful starting point, so a ".local" sibling wins over it.
+    """
+
+    def test_the_local_file_wins(self, tmp_path):
+        from lwstt.core.wordlists import load_list
+
+        (tmp_path / "vocabulary.md").write_text("- Shipped\n", encoding="utf-8")
+        (tmp_path / "vocabulary.local.md").write_text("- Personal\n", encoding="utf-8")
+        assert load_list(tmp_path / "vocabulary.md") == ["Personal"]
+
+    def test_the_tracked_file_is_used_when_there_is_no_local_one(self, tmp_path):
+        from lwstt.core.wordlists import load_list
+
+        (tmp_path / "vocabulary.md").write_text("- Shipped\n", encoding="utf-8")
+        assert load_list(tmp_path / "vocabulary.md") == ["Shipped"]
+
+    def test_missing_everything_is_empty_not_an_error(self, tmp_path):
+        from lwstt.core.wordlists import load_list
+
+        assert load_list(tmp_path / "nope.md") == []
+
+    def test_the_shipped_vocabulary_carries_no_personal_terms(self):
+        """The tracked file is a template; personal entries belong in .local."""
+        from pathlib import Path
+
+        from lwstt.core.wordlists import parse_markdown_list
+
+        root = Path(__file__).resolve().parent.parent
+        terms = parse_markdown_list((root / "vocabulary.md").read_text(encoding="utf-8"))
+        assert terms, "the template should still show some examples"
