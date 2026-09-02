@@ -34,6 +34,8 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
+# Post the request to the owning thread instead of waiting on it -- see below.
+SWP_ASYNCWINDOWPOS = 0x4000
 
 LWA_COLORKEY = 0x00000001
 LWA_ALPHA = 0x00000002
@@ -53,6 +55,8 @@ user32.DefWindowProcW.argtypes = (
     wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
 )
 user32.DefWindowProcW.restype = LRESULT
+user32.ShowWindowAsync.argtypes = (wintypes.HWND, ctypes.c_int)
+user32.ShowWindowAsync.restype = wintypes.BOOL
 user32.CreateWindowExW.argtypes = (
     wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
     ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
@@ -198,8 +202,10 @@ class RecordingDot:
         """
         if not self._visible or not self._hwnd:
             return
+        # Runs on a Timer thread, so it must not wait on the owning thread either.
         user32.SetWindowPos(
-            self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            self._hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
         )
         self._topmost_timer = threading.Timer(1.0, self._reassert_topmost)
         self._topmost_timer.daemon = True
@@ -215,6 +221,31 @@ class RecordingDot:
         if self._hwnd is None:
             self._create()
 
+    # Every window call below is asynchronous, and that is load-bearing.
+    #
+    # This window belongs to the thread that created it -- the main thread,
+    # which pumps messages and runs the keyboard hook. show() and hide() are
+    # called from the signal thread and the audio pump, *while they hold the
+    # supervisor's lock*. A cross-thread ShowWindow or SetWindowPos does not
+    # just set a flag: it sends the owning thread a message and waits for it to
+    # be processed. So if the main thread is not pumping, the caller waits
+    # forever, holding the lock.
+    #
+    # That is not hypothetical, because the main thread stops pumping in exactly
+    # one common case: _on_key() runs inside the keyboard hook and calls
+    # cancel_pending(), which blocks on the same lock. One keystroke landing
+    # while _disarm() was hiding the dot deadlocked the two threads against each
+    # other, and every other thread piled up behind the lock. The app went
+    # completely silent -- no hotkey, no logging, no worker eviction -- while the
+    # microphone kept recording, because dot.hide() is the first line of
+    # _stop_recording() and never returned to call recorder.stop(). Observed
+    # 2026-09-02, reproduced in tests/test_win_layer.py.
+    #
+    # ShowWindowAsync and SWP_ASYNCWINDOWPOS post the request to the owning
+    # thread and return immediately. A dot that lags a frame, or never updates
+    # because the main thread is busy, is a cosmetic problem; blocking here is a
+    # total freeze.
+
     def show(self) -> None:
         try:
             if self._hwnd is None:
@@ -222,9 +253,9 @@ class RecordingDot:
             x, y = dot_position()
             user32.SetWindowPos(
                 self._hwnd, HWND_TOPMOST, x, y, self.size, self.size,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
             )
-            user32.ShowWindow(self._hwnd, SW_SHOWNOACTIVATE)
+            user32.ShowWindowAsync(self._hwnd, SW_SHOWNOACTIVATE)
             self._visible = True
             self._reassert_topmost()
         except OSError:
@@ -237,7 +268,7 @@ class RecordingDot:
             self._topmost_timer.cancel()
             self._topmost_timer = None
         if self._hwnd:
-            user32.ShowWindow(self._hwnd, SW_HIDE)
+            user32.ShowWindowAsync(self._hwnd, SW_HIDE)
 
     def destroy(self) -> None:
         self.hide()

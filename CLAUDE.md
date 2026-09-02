@@ -117,6 +117,15 @@ which is spawned on demand and evicted after 15 idle minutes.
 If a bug report says the app does nothing at all — no markers, no text, nothing
 in `logs/app.log` — ask what window had focus before assuming a crash.
 
+Run `python app.py --status` first, though. It is answered on a lock-free
+thread, so it still replies when the rest of the app is wedged, and it tells the
+two apart: `dictating: true` with `armed: false` is not UIPI, it is a deadlock.
+The supervisor still believes a dictation is in flight, which also disables the
+finalize timeout and the worker eviction, so it stays that way — silently, with
+the microphone still recording. A frozen supervisor holds flat at 0% CPU while
+its memory grows about 32 KB/s, which is undrained audio. The comment above
+`show()` in `lwstt/win/indicator.py` explains the one that got away.
+
 Windows UIPI stops a process at one integrity level sending input to a higher
 one. The app runs non-elevated on purpose, so any window started with "Run as
 administrator" is unreachable. The block hits the keyboard hook, not just the

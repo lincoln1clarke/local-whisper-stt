@@ -6,6 +6,8 @@ directly; the event structures are inspected rather than dispatched.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from lwstt.win import keys
@@ -185,3 +187,93 @@ class TestIndicatorPlacement:
         monkeypatch.setattr(module, "tray_rect", lambda: None)
         x, y = module.dot_position()
         assert x > 0 and y > 0
+
+
+class TestIndicatorNeverBlocksItsCaller:
+    """The dot must never make its caller wait on the thread that owns it.
+
+    The dot window belongs to the main thread, which pumps messages and runs the
+    keyboard hook. show() and hide() are called from other threads while they
+    hold the supervisor's lock, and the main thread blocks on that same lock
+    whenever a keystroke reaches cancel_pending(). A synchronous cross-thread
+    ShowWindow therefore deadlocked the two against each other and froze the
+    whole app -- with the microphone still running, because hide() is the first
+    line of _stop_recording(). These tests fail (by timing out) if the window
+    calls ever go back to being synchronous.
+    """
+
+    TIMEOUT_S = 10.0
+
+    @pytest.fixture
+    def stalled_owner(self):
+        """A dot whose owning thread has stopped pumping messages."""
+        import ctypes
+        import threading
+        from ctypes import wintypes
+
+        from lwstt.win.indicator import RecordingDot
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        dot = RecordingDot()
+        created = threading.Event()
+        stop_pumping = threading.Event()
+        finished = threading.Event()
+
+        def owner() -> None:
+            # Same as the supervisor: created *and shown* on the thread that
+            # pumps. Actually showing it matters -- SW_HIDE on a window that is
+            # already hidden changes no state, so it returns without ever
+            # talking to the owning thread and the test would pass vacuously.
+            dot.create()
+            dot.show()
+            created.set()
+            msg = wintypes.MSG()
+            while not stop_pumping.is_set():
+                while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                    user32.TranslateMessage(ctypes.byref(msg))
+                    user32.DispatchMessageW(ctypes.byref(msg))
+                time.sleep(0.01)
+            # Stuck, exactly like the main thread waiting on _lock in the hook.
+            finished.wait(30)
+
+        thread = threading.Thread(target=owner, daemon=True)
+        thread.start()
+        assert created.wait(10), "dot window was never created"
+        time.sleep(0.2)  # let the show request be processed while it still can
+        stop_pumping.set()
+        time.sleep(0.2)  # let the pump loop settle into its wait
+        try:
+            yield dot
+        finally:
+            finished.set()
+            thread.join(timeout=10)
+
+    def _call_with_timeout(self, func):
+        """Run func on a thread; return whether it came back."""
+        import threading
+
+        returned = threading.Event()
+        threading.Thread(target=lambda: (func(), returned.set()), daemon=True).start()
+        return returned.wait(self.TIMEOUT_S)
+
+    def test_hide_returns_when_the_owning_thread_is_stuck(self, stalled_owner):
+        assert self._call_with_timeout(stalled_owner.hide), (
+            "dot.hide() blocked on the owning thread -- this is the deadlock that "
+            "froze the app; ShowWindowAsync, not ShowWindow"
+        )
+
+    def test_show_returns_when_the_owning_thread_is_stuck(self, stalled_owner):
+        assert self._call_with_timeout(stalled_owner.show), (
+            "dot.show() blocked on the owning thread; SetWindowPos needs "
+            "SWP_ASYNCWINDOWPOS and ShowWindowAsync"
+        )
+
+    def test_reasserting_topmost_returns_when_the_owning_thread_is_stuck(
+        self, stalled_owner
+    ):
+        stalled_owner._visible = True
+        assert self._call_with_timeout(stalled_owner._reassert_topmost), (
+            "the topmost timer blocked on the owning thread; SetWindowPos needs "
+            "SWP_ASYNCWINDOWPOS"
+        )
+        stalled_owner.hide()  # stop the timer it just rescheduled
