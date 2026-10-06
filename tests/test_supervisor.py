@@ -455,8 +455,10 @@ class TestFlashReduction:
 
 
 class TestPreviewWindow:
-    """With preview.window_s set, previews stop after the opening seconds and
-    only finished chunks are typed -- nothing is deleted from then on."""
+    """With preview.window_s set, previews stop after the opening seconds.
+    From then on each finished chunk is typed once, and the markers after it
+    say whether it is merely recording (~~) or holding speech whose text is
+    still to come (~|~)."""
 
     def start(self, sup, window=10, elapsed=0.0):
         sup.config.preview.window_s = window
@@ -465,69 +467,135 @@ class TestPreviewWindow:
         sup._pump_once()
         sup.armed_at -= elapsed
 
+    def say(self, sup, msg, **fields):
+        sup._on_worker_message(msg, {"session": sup.session, **fields})
+
     def test_previews_are_typed_inside_the_window(self, sup):
         self.start(sup)
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        self.say(sup, Msg.PREVIEW, text="hello")
         assert sup.typing.on_screen() == " ~hello~"
 
     def test_previews_are_dropped_after_the_window(self, sup):
         self.start(sup, elapsed=11)
         sup._pump_once()
         sup.typed.clear()
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        self.say(sup, Msg.PREVIEW, text="hello")
         assert sup.typed == []
 
-    def test_the_empty_markers_come_down_when_the_window_closes(self, sup):
-        self.start(sup)
+    def test_the_markers_stay_up_for_as_long_as_it_records(self, sup):
+        self.start(sup, elapsed=11)
+        sup._pump_once()
         assert sup.typing.on_screen() == " ~~"
+
+    def test_buffered_speech_shows_between_the_markers(self, sup):
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        assert sup.typing.on_screen() == " ~|~"
+        self.say(sup, Msg.PENDING, pending=False)
+        assert sup.typing.on_screen() == " ~~"
+
+    def test_inside_the_window_the_preview_says_it_instead(self, sup):
+        self.start(sup)
+        self.say(sup, Msg.PENDING, pending=True)
+        assert sup.typing.on_screen() == " ~~"
+        # ...but the state is not lost: it shows as soon as the window closes.
         sup.armed_at -= 11
         sup._pump_once()
-        assert sup.typing.on_screen() == ""
+        assert sup.typing.on_screen() == " ~|~"
 
     def test_a_preview_on_screen_waits_for_its_commit(self, sup):
         """Removing it at the deadline would be one more delete, and would
         blank the screen while the chunk is still being spoken."""
         self.start(sup)
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "helo"})
+        self.say(sup, Msg.PREVIEW, text="helo")
+        self.say(sup, Msg.PENDING, pending=True)
         sup.armed_at -= 11
         sup.typed.clear()
         sup._pump_once()
         assert sup.typed == []
-        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Hello."})
-        assert sup.typing.on_screen() == " Hello."
+        self.say(sup, Msg.COMMIT, text="Hello.", pending=False)
+        assert sup.typing.on_screen() == " Hello. ~~"
 
-    def test_nothing_is_deleted_once_the_window_has_closed(self, sup):
-        self.start(sup)
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "one"})
-        sup.armed_at -= 11
-        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "One."})
+    def test_a_commit_with_more_behind_it_keeps_the_pending_marker(self, sup):
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        self.say(sup, Msg.COMMIT, text="One.", pending=True)
+        assert sup.typing.on_screen() == " One. ~|~"
+
+    def test_only_the_markers_are_ever_deleted_after_the_window(self, sup):
+        self.start(sup, elapsed=11)
+        sup._pump_once()
         sup.typed.clear()
-        for text in ("Two.", "Three."):
-            sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": text.lower()})
+        for text in ("One.", "Two.", "Three."):
+            self.say(sup, Msg.PENDING, pending=True)
+            self.say(sup, Msg.PREVIEW, text=text.lower())
             sup._pump_once()
-            sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": text})
-        sup._disarm()
-        sup._on_worker_message(Msg.DONE, {"session": sup.session})
-        assert sup.typed == [Edit(0, " Two."), Edit(0, " Three.")]
+            self.say(sup, Msg.COMMIT, text=text, pending=False)
+        assert sup.typing.on_screen() == " One. Two. Three. ~~"
+        assert max(edit.backspaces for edit in sup.typed) <= len("~|~")
 
-    def test_a_commit_inside_the_window_keeps_the_markers(self, sup):
-        self.start(sup)
-        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "One."})
-        assert sup.typing.on_screen() == " One. ~~"
+    def test_an_empty_chunk_leaves_the_markers_standing(self, sup):
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        self.say(sup, Msg.COMMIT, text="", pending=False)
+        assert sup.typing.on_screen() == " ~~"
+
+    def test_release_with_nothing_buffered_clears_the_markers(self, sup):
+        self.start(sup, elapsed=11)
+        sup._pump_once()
+        sup._disarm()
+        assert sup.typing.on_screen() == ""
+
+    def test_the_pending_marker_outlives_the_release(self, sup):
+        """It promises text, and the text is still coming."""
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        sup._disarm()
+        assert sup.typing.on_screen() == " ~|~"
+        sup.typed.clear()
+        self.say(sup, Msg.COMMIT, text="One.", pending=False)
+        self.say(sup, Msg.DONE)
+        assert sup.typing.on_screen() == ""  # state forgotten once finished
+        assert sup.typed == [Edit(3, "One.")]
+
+    def test_done_clears_a_pending_marker_that_came_to_nothing(self, sup):
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        sup._disarm()
+        sup.typed.clear()
+        self.say(sup, Msg.DONE)
+        assert sup.typed == [Edit(len(" ~|~"), "")]
+
+    def test_a_stale_pending_report_is_ignored(self, sup):
+        self.start(sup, elapsed=11)
+        sup._pump_once()
+        sup._on_worker_message(Msg.PENDING, {"session": sup.session - 1, "pending": True})
+        assert sup.typing.on_screen() == " ~~"
+
+    def test_no_pending_marker_without_listening_markers(self, sup):
+        sup.config.output.show_listening_markers = False
+        self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
+        self.say(sup, Msg.COMMIT, text="One.", pending=True)
+        assert sup.typing.on_screen() == " One."
 
     def test_zero_previews_for_the_whole_dictation(self, sup):
         self.start(sup, window=0, elapsed=3600)
         sup._pump_once()
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        self.say(sup, Msg.PENDING, pending=True)
+        assert sup.typing.on_screen() == " ~~"
+        self.say(sup, Msg.PREVIEW, text="hello")
         assert sup.typing.on_screen() == " ~hello~"
 
     def test_the_window_restarts_with_each_dictation(self, sup):
         self.start(sup, elapsed=11)
+        self.say(sup, Msg.PENDING, pending=True)
         sup._disarm()
-        sup._on_worker_message(Msg.DONE, {"session": sup.session})
+        self.say(sup, Msg.DONE)
         sup._arm()
         sup._pump_once()
-        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typing.on_screen() == " ~~"
+        self.say(sup, Msg.PREVIEW, text="hello")
         assert sup.typing.on_screen() == " ~hello~"
 
     def test_the_worker_is_told_the_window(self, sup):

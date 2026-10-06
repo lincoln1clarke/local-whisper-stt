@@ -355,18 +355,56 @@ class TestSpacingBetweenCommittedAndPreview:
         assert screen.text == "First sentence. Second sentence."
 
 
-class TestCommitRetiringTheMarkers:
-    def test_commit_keeps_the_markers_by_default(self):
+class TestPendingMarker:
+    def test_it_sits_between_the_markers(self):
         state = TypingState()
         state.set_listening(True)
-        state.commit("One.")
-        assert state.on_screen() == " One. ~~"
+        state.set_pending(True)
+        assert state.on_screen() == " ~|~"
 
-    def test_commit_can_retire_them_in_the_same_edit(self):
+    def test_toggling_it_costs_a_keystroke_or_two(self):
         state = TypingState()
         state.set_listening(True)
+        assert state.set_pending(True) == Edit(1, "|~")
+        assert state.set_pending(False) == Edit(2, "~")
+
+    def test_it_outlives_listening(self):
+        """Text is still owed after the keys come up."""
+        state = TypingState()
+        state.set_listening(True)
+        state.set_pending(True)
+        assert state.set_listening(False).is_noop
+        assert state.on_screen() == " ~|~"
+
+    def test_provisional_text_takes_its_place(self):
+        state = TypingState()
+        state.set_pending(True)
+        state.set_provisional("hello")
+        assert state.on_screen() == " ~hello~"
+
+    def test_commit_sets_it_in_the_same_edit(self):
+        state = TypingState()
+        state.set_listening(True)
+        state.set_pending(True)
         before = state.on_screen()
-        edit = state.commit("One.", keep_listening=False)
-        assert apply_edit(before, edit) == " One."
+        edit = state.commit("One.", pending=True)
+        assert apply_edit(before, edit) == " One. ~|~"
+        assert state.commit("Two.", pending=False) == Edit(3, "Two. ~~")
+
+    def test_an_empty_commit_only_settles_the_marker(self):
+        state = TypingState()
+        state.set_listening(True)
+        state.set_pending(True)
+        state.commit("", pending=False)
+        assert state.on_screen() == " ~~"
+
+    def test_abort_clears_it(self):
+        state = TypingState()
+        state.commit("One.", pending=True)
+        state.abort()
         assert state.on_screen() == " One."
-        assert state.commit("Two.", keep_listening=False) == Edit(0, " Two.")
+
+    def test_the_character_is_configurable(self):
+        state = TypingState(marker_pending="-")
+        state.set_pending(True)
+        assert state.on_screen() == " ~-~"

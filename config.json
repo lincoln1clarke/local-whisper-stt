@@ -63,6 +63,7 @@
   "output": {
     "marker_open": "~",
     "marker_close": "~",
+    "marker_pending": "|",
     "normalize_newlines_to_space": true,
     "leading_space": true,
     "min_revision_interval_ms": 1200,

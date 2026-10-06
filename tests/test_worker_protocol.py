@@ -339,4 +339,9 @@ class TestPreviewLoop:
             assert h.done.wait(180)
             previews = [o.get("text", "") for m, o in h.messages if m is Msg.PREVIEW]
         assert previews == [], f"previews after the window: {previews}"
+        # With no preview, this is all that says something was heard.
+        reports = [o["pending"] for m, o in h.messages if m is Msg.PENDING]
+        assert reports and reports[0] is True
+        commits = [o for m, o in h.messages if m is Msg.COMMIT]
+        assert commits[-1]["pending"] is False
         assert "quick brown fox" in h.final_text().lower()

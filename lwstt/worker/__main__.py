@@ -82,6 +82,7 @@ class Worker:
         self.ended = False
         self.last_preview = 0.0
         self.last_preview_text = ""
+        self.pending: bool | None = False  # last state reported; None forces a resend
         self.started_at = None
         self.session = 0
         self.chunk_offset = 0.0  # seconds of this dictation already committed
@@ -208,6 +209,21 @@ class Worker:
             self.last_preview_text = text
             self.send_json(Msg.PREVIEW, {"text": text, "session": self.session})
 
+    def report_pending(self, pending: bool) -> None:
+        """Tell the supervisor whether speech is buffered and not yet committed.
+
+        Sent on change only. Once previews stop, this is all the supervisor has
+        to show that something was heard and its text is on the way.
+        """
+        if pending == self.pending:
+            return
+        self.pending = pending
+        self.send_json(Msg.PENDING, {"pending": pending, "session": self.session})
+
+    def buffered_speech(self) -> bool:
+        audio = asr.pcm_to_float(bytes(self.open_pcm))
+        return bool(audio.size and asr.speech_segments(audio, self.sample_rate))
+
     def close_chunk(self, cut_at: float, forced: bool) -> None:
         """Finalise everything up to ``cut_at`` and emit it as committed."""
         cut_bytes = int((cut_at + CUT_PAD_S) * self.sample_rate) * BYTES_PER_SAMPLE
@@ -234,6 +250,8 @@ class Worker:
         except Exception as exc:
             log(f"final failed: {exc}\n{traceback.format_exc()}")
             self.send_json(Msg.ERROR, {"message": f"transcription failed: {exc}"})
+            # No commit goes out to carry the new state, so say it again.
+            self.pending = None
             return
 
         text = self.clean(asr.segments_text(segments))
@@ -250,22 +268,20 @@ class Worker:
 
         if text:
             self.committed.append(text)
-            self.send_json(
-                Msg.COMMIT,
-                {
-                    "chunk": self.chunk_index,
-                    "text": text,
-                    "forced": forced,
-                    "session": self.session,
-                },
-            )
-        else:
-            # Nothing survived: still clear whatever preview is on screen.
-            self.send_json(
-                Msg.COMMIT,
-                {"chunk": self.chunk_index, "text": "", "forced": forced,
-                 "session": self.session},
-            )
+        # The commit carries whether more speech is already waiting behind it,
+        # so the supervisor types the text and the right marker in one edit.
+        # Sent even when nothing survived, to clear whatever is on screen.
+        self.pending = self.buffered_speech()
+        self.send_json(
+            Msg.COMMIT,
+            {
+                "chunk": self.chunk_index,
+                "text": text,
+                "forced": forced,
+                "pending": self.pending,
+                "session": self.session,
+            },
+        )
         self.chunk_index += 1
 
     def process_audio(self) -> None:
@@ -289,10 +305,12 @@ class Worker:
             # Silence only. Never hand this to the model.
             self.open_pcm.clear()
             self.last_preview_text = ""
+            self.report_pending(False)
             return
         if result.action is Action.CLOSE:
             self.close_chunk(result.cut_at, result.forced)
             return
+        self.report_pending(bool(speech))
         self.run_preview()
 
     # -- logging ---------------------------------------------------------

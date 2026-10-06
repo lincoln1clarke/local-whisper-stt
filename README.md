@@ -98,7 +98,8 @@ The settings most worth touching:
 | `output.marker_open` / `_close` | `~` | Avoid characters editors auto-pair -- that breaks the typing invariant. |
 | `chunking.max_chunk_s` | 12 | Forced cut when you never pause. Lower commits more often; higher costs more per pass. |
 | `preview.refresh_ms` | 700 | Must stay above the ~0.3 s a preview pass costs, or previews starve the finals. |
-| `preview.window_s` | 0 | 0 previews for the whole dictation. Set it to, say, 10 and only the first ten seconds are previewed -- enough to see it is working -- after which finished chunks are typed once and nothing is ever deleted, with no markers. For targets that redraw slowly enough to fall behind the retyping, terminals above all. Text then arrives a chunk at a time, up to `chunking.max_chunk_s` behind your voice. |
+| `preview.window_s` | 0 | 0 previews for the whole dictation. Set it to, say, 10 and only the first ten seconds are previewed -- enough to see it is working -- after which each finished chunk is typed once and only the markers after it change: `~~` while it is recording with nothing waiting, `~\|~` while it holds speech whose text has not been typed yet. For targets that redraw slowly enough to fall behind the retyping, terminals above all. Text then arrives a chunk at a time, up to `chunking.max_chunk_s` behind your voice. |
+| `output.marker_pending` | `\|` | The character between the markers in that state. The same caution about auto-pairing applies. |
 | `models.final_ac` | turbo | `faster-whisper-large-v3` is more accurate for ~0.5 s more per chunk. |
 
 ## How it is put together

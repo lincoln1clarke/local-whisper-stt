@@ -49,6 +49,7 @@ class Supervisor:
             config.output.marker_open,
             config.output.marker_close,
             leading_space=config.output.leading_space,
+            marker_pending=config.output.marker_pending,
         )
         self.dot = RecordingDot()
         self.recorder: Recorder | None = None
@@ -68,6 +69,7 @@ class Supervisor:
         self._aborted_this_press = False
         self._focus_warned = False
         self._awaiting_done_since: float | None = None
+        self._worker_pending = False
         self._cleanup_hwnd = 0
         self._cleanup_deadline = 0.0
         self.target_hwnd = 0
@@ -172,7 +174,7 @@ class Supervisor:
         self._emit(lambda: self.typing.set_listening(False))
         # Committed text staying on screen is correct -- it is the finished
         # dictation. Only markers are leftovers.
-        if self.typing.provisional or self.typing.listening:
+        if self.typing.wrapped_provisional():
             self.log(
                 f"dictation ended with markers still on screen "
                 f"({self.typing.wrapped_provisional()!r}, {reason})"
@@ -249,7 +251,10 @@ class Supervisor:
 
     def _on_worker_message(self, msg: Msg, obj: dict) -> None:
         with self._lock:
-            if msg in (Msg.PREVIEW, Msg.COMMIT, Msg.DONE) and not self._is_current(obj):
+            if (
+                msg in (Msg.PREVIEW, Msg.COMMIT, Msg.DONE, Msg.PENDING)
+                and not self._is_current(obj)
+            ):
                 if msg is Msg.DONE:
                     # Dropping this leaves the dictation looking unfinished, so
                     # it must never pass unnoticed.
@@ -259,20 +264,29 @@ class Supervisor:
                     )
                     self._end_dictation("stale done")
                 return
-            if msg in (Msg.PREVIEW, Msg.COMMIT) and not self.dictating:
+            if msg in (Msg.PREVIEW, Msg.COMMIT, Msg.PENDING) and not self.dictating:
                 return
 
             if msg is Msg.PREVIEW:
                 self._apply_preview(obj.get("text", ""))
             elif msg is Msg.COMMIT:
                 text = obj.get("text", "")
-                if text:
-                    keep = not self._previews_over()
-                    self._emit(lambda: self.typing.commit(text, keep_listening=keep))
-                    if self.config.feedback.beep_on_commit:
-                        beep(*COMMIT_TONE)
+                self._worker_pending = bool(obj.get("pending", False))
+                if self._previews_over():
+                    # One edit for the chunk and the marker that follows it,
+                    # and an empty chunk leaves the markers standing: it is
+                    # still recording.
+                    pending = self._pending_shown()
+                    self._emit(lambda: self.typing.commit(text, pending=pending))
+                elif text:
+                    self._emit(lambda: self.typing.commit(text))
                 else:
                     self._emit(self.typing.abort)
+                if text and self.config.feedback.beep_on_commit:
+                    beep(*COMMIT_TONE)
+            elif msg is Msg.PENDING:
+                self._worker_pending = bool(obj.get("pending", False))
+                self._sync_markers()
             elif msg is Msg.DONE:
                 self._end_dictation("done")
             elif msg is Msg.ERROR:
@@ -283,27 +297,38 @@ class Supervisor:
     def _previews_over(self) -> bool:
         """Whether this dictation has outlived ``preview.window_s``.
 
-        Past the window only finished chunks are typed. Every preview is typed,
-        backspaced and typed again as the commit, so a target that redraws
-        slowly -- a terminal, most of all -- spends its time on text that was
-        never going to stay, and falls further behind the longer the dictation
-        runs. The first seconds keep their preview: that is the proof it is
-        working at all.
+        Past the window only finished chunks are typed, and all that is ever
+        deleted is the few characters of marker after them. Every preview is
+        typed, backspaced and typed again as the commit, so a target that
+        redraws slowly -- a terminal, most of all -- spends its time on text
+        that was never going to stay, and falls further behind the longer the
+        dictation runs. The first seconds keep their preview: that is the proof
+        it is working at all.
         """
         window = self.config.preview.window_s
         return window > 0 and time.monotonic() - self.armed_at >= window
 
-    def _retire_markers(self) -> None:
-        """Take the empty marker pair down once the preview window has closed.
+    def _pending_shown(self) -> bool:
+        return self._worker_pending and self.config.output.show_listening_markers
 
-        A preview still on screen is left for its commit to replace: removing
-        it here would be one more delete, and would blank the only sign of life
-        while that chunk is still being spoken.
+    def _sync_markers(self) -> None:
+        """Past the preview window, make the markers say what the worker holds.
+
+        With no preview to watch, the markers are the only sign of life, so
+        they carry two things: the empty pair means it is recording and has
+        nothing waiting, and the pair around ``marker_pending`` means speech is
+        buffered whose text has not been typed yet. Inside the window the
+        preview says all of that already.
+
+        A preview still on screen when the window closes is left for its
+        commit to replace: removing it here would be one more delete, and
+        would blank the screen while that chunk is still being spoken.
         """
-        if not self.typing.listening or self.typing.provisional:
+        if not self._previews_over() or self.typing.provisional:
             return
-        if self._previews_over():
-            self._emit(lambda: self.typing.set_listening(False))
+        pending = self._pending_shown()
+        if self.typing.pending != pending:
+            self._emit(lambda: self.typing.set_pending(pending))
 
     def _apply_preview(self, text: str) -> None:
         """Type a preview update, skipping churn that is not worth the flicker.
@@ -442,6 +467,7 @@ class Supervisor:
             self.session += 1
             self._aborted_this_press = False
             self._focus_warned = False
+            self._worker_pending = False
             # Measured from arming, so the very first reword is rate-limited
             # like any other rather than passing for free.
             self._last_revision = time.monotonic()
@@ -494,7 +520,9 @@ class Supervisor:
             # marker pair has nothing left to indicate. Removing it here rather
             # than waiting for DONE means a stray "~~" cannot outlive the press
             # however the rest of the finish goes. Provisional *text* stays: a
-            # commit is still coming to replace it.
+            # commit is still coming to replace it. So does the pending marker,
+            # for the same reason -- set_listening(False) does not touch it,
+            # and DONE or the finalize timeout takes it down.
             if not self.typing.provisional:
                 self._emit(lambda: self.typing.set_listening(False))
             if self.worker.end_dictation():
@@ -550,7 +578,7 @@ class Supervisor:
                 self.worker.start_dictation(self.worker_settings())
                 if self.config.output.show_listening_markers:
                     self._emit(lambda: self.typing.set_listening(True))
-            self._retire_markers()
+            self._sync_markers()
             data = recorder.read_available()
             if data:
                 self.worker.send_audio(data)

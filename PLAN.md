@@ -495,11 +495,20 @@ default). Every preview is typed, backspaced and typed again as the commit, so e
 sentence costs roughly three times its length in keystrokes. A target that redraws
 slowly — a terminal running a TUI is the case that prompted this — cannot keep up, and
 the backlog grows for as long as the dictation runs. Past the window nothing provisional
-is typed and no markers are shown: each chunk lands once, as an append, and nothing is
-deleted again. The opening seconds keep their preview because that is the only evidence
-the thing is working. A preview still on screen when the window closes is left for its
+is typed: each chunk lands once, and the only characters ever deleted are the markers
+after it. The opening seconds keep their preview because that is the only evidence the
+thing is working. A preview still on screen when the window closes is left for its
 commit to replace rather than removed, which would be one more delete. The worker stops
 running preview passes at the same point, which also returns that GPU time to the finals.
+
+With no preview to watch, the markers have to say more, so past the window they have
+two states. `~~` means it is recording and nothing is waiting. `~|~` means speech is
+buffered whose text has not been typed yet. The worker reports that state as it changes
+(`PENDING`), and every `COMMIT` carries it too, so the text and the marker that follows
+it go out as one edit instead of a marker typed and then corrected. `~|~` behaves like
+provisional text rather than like the empty pair: it survives the keys coming up, because
+the text it promises is still on its way, and comes down on `DONE` — which also covers
+the case where the buffered audio turns out to hold nothing worth typing.
 
 *Why `~`:* the whole scheme rests on the invariant that N characters typed equals N
 characters present, and the only mechanism that breaks it is **auto-pairing** — an editor

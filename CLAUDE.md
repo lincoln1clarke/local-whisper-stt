@@ -98,7 +98,10 @@ followed straight by an eviction still keeps its recording.
 
 The same rule covers the supervisor. The empty `~~` pair is cleared when the
 keys are released, not when `DONE` arrives, so no delay downstream can strand
-it.
+it. `~|~` (shown past `preview.window_s` while speech is buffered) is the
+exception on purpose: like provisional text it promises that something is still
+coming, so it stays until the commit or `DONE`, with the finalize timeout
+behind it.
 
 ## The supervisor must stay light
 
@@ -141,7 +144,7 @@ this to users; keep the two in step.
 ## Tests
 
 ```
-.venv\Scripts\python -m pytest tests\ -q            # 455 fast, no GPU
+.venv\Scripts\python -m pytest tests\ -q            # 469 fast, no GPU
 .venv\Scripts\python -m pytest tests\ -q -m slow    # 33, real models on the GPU
 ```
 

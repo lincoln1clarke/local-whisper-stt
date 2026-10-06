@@ -48,6 +48,7 @@ class Msg(IntEnum):
     ERROR = 23
     READY = 24  # models loaded and usable
     PONG = 25
+    PENDING = 26  # whether speech is buffered that has not been committed yet
 
 
 class ProtocolError(Exception):

@@ -22,19 +22,27 @@ class TypingState:
         marker_open: str = "~",
         marker_close: str = "~",
         leading_space: bool = True,
+        marker_pending: str = "|",
     ) -> None:
         self.marker_open = marker_open
         self.marker_close = marker_close
+        self.marker_pending = marker_pending
         self.leading_space = leading_space
         self.committed = ""
         self.provisional = ""
         self.listening = False
+        self.pending = False
 
     # -- introspection ---------------------------------------------------
 
     def wrapped_provisional(self) -> str:
         if self.provisional:
             return f"{self.marker_open}{self.provisional}{self.marker_close}"
+        if self.pending:
+            # Speech is buffered and its text is still to come, but no preview
+            # of it is being shown. Like provisional text, this outlives the
+            # keys coming up: it is a promise that something is on its way.
+            return f"{self.marker_open}{self.marker_pending}{self.marker_close}"
         if self.listening:
             # Empty markers: proof it is listening, and proof the caret is
             # somewhere that accepts text, without waiting for a transcription.
@@ -61,6 +69,14 @@ class TypingState:
 
         def mutate() -> None:
             self.listening = listening
+
+        return self._transition(mutate)
+
+    def set_pending(self, pending: bool) -> Edit:
+        """Show or hide the sign that buffered speech is awaiting its text."""
+
+        def mutate() -> None:
+            self.pending = pending
 
         return self._transition(mutate)
 
@@ -94,18 +110,18 @@ class TypingState:
 
         return self._transition(mutate)
 
-    def commit(self, text: str, keep_listening: bool = True) -> Edit:
+    def commit(self, text: str, pending: bool = False) -> Edit:
         """Finalise a chunk: drop the markers and fold it into committed text.
 
-        ``keep_listening=False`` also retires the empty marker pair in the same
-        edit, so it is never typed after the chunk only to be deleted again.
+        ``pending`` says whether more speech is already buffered behind this
+        chunk. It is set in the same edit so the marker that follows the text
+        is typed once, correctly, rather than typed and then corrected.
         """
 
         def mutate() -> None:
             self.committed = append_chunk(self.committed, text)
             self.provisional = ""
-            if not keep_listening:
-                self.listening = False
+            self.pending = pending
 
         return self._transition(mutate)
 
@@ -119,6 +135,7 @@ class TypingState:
         def mutate() -> None:
             self.provisional = ""
             self.listening = False
+            self.pending = False
 
         return self._transition(mutate)
 
@@ -133,6 +150,7 @@ class TypingState:
             self.committed = ""
             self.provisional = ""
             self.listening = False
+            self.pending = False
 
         return self._transition(mutate)
 
@@ -141,3 +159,4 @@ class TypingState:
         self.committed = ""
         self.provisional = ""
         self.listening = False
+        self.pending = False

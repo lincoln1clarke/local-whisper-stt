@@ -77,9 +77,10 @@ class PreviewSection:
     refresh_ms: int = 700
     beam_size: int = 1
     # 0 previews for the whole dictation. Anything higher previews only that
-    # many seconds, as proof it is working, then types finished chunks and
-    # nothing else: no markers, and no further delete-and-retype. Worth setting
-    # where the target redraws slowly enough to fall behind the retyping.
+    # many seconds, as proof it is working, then types each finished chunk
+    # once, with only the markers after it to say what state it is in. Worth
+    # setting where the target redraws slowly enough to fall behind the
+    # retyping.
     window_s: int = 0
 
 
@@ -127,6 +128,9 @@ class RuntimeSection:
 class OutputSection:
     marker_open: str = "~"
     marker_close: str = "~"
+    # Shown between the markers once preview.window_s has passed, while speech
+    # is buffered whose text has not been typed yet.
+    marker_pending: str = "|"
     normalize_newlines_to_space: bool = True
     # Dictation usually starts where a caret already sits at the end of a word,
     # and the target cannot be read to find out.
