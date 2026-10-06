@@ -318,3 +318,25 @@ class TestPreviewLoop:
             assert h.done.wait(120)
             previews = [o.get("text", "") for m, o in h.messages if m is Msg.PREVIEW]
         assert previews == [], f"silence produced previews: {previews}"
+
+    def test_no_preview_once_the_window_has_closed(self, tmp_path):
+        """Past preview.window_s the supervisor discards previews, so the
+        worker must not spend GPU time producing them."""
+        with Harness(tmp_path) as h:
+            # A window shorter than the least audio a preview needs, so every
+            # pass that could run falls after it.
+            h.settings["preview"] = {
+                "enabled": True, "refresh_ms": 200, "beam_size": 1, "window_s": 0.2,
+            }
+            h.client.start_dictation(h.settings)
+            assert h.ready.wait(120)
+            pcm = read_pcm(FIXTURES / "simple.wav")
+            step = 16000 * 2 // 10
+            for i in range(0, len(pcm), step):
+                h.client.send_audio(pcm[i : i + step])
+                time.sleep(0.1)
+            h.client.end_dictation()
+            assert h.done.wait(180)
+            previews = [o.get("text", "") for m, o in h.messages if m is Msg.PREVIEW]
+        assert previews == [], f"previews after the window: {previews}"
+        assert "quick brown fox" in h.final_text().lower()

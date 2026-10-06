@@ -79,6 +79,14 @@ dictation, so editing them takes effect on the next thing you say.
 A broken `config.json` never prevents startup: bad values fall back to defaults
 and are logged.
 
+A `config.local.json` beside it is laid over it one setting at a time and is
+gitignored, so a preference that only suits one machine does not have to be a
+change to the tracked file. It needs only the settings it changes:
+
+```json
+{ "preview": { "window_s": 10 } }
+```
+
 The settings most worth touching:
 
 | Setting | Default | Notes |
@@ -90,6 +98,7 @@ The settings most worth touching:
 | `output.marker_open` / `_close` | `~` | Avoid characters editors auto-pair -- that breaks the typing invariant. |
 | `chunking.max_chunk_s` | 12 | Forced cut when you never pause. Lower commits more often; higher costs more per pass. |
 | `preview.refresh_ms` | 700 | Must stay above the ~0.3 s a preview pass costs, or previews starve the finals. |
+| `preview.window_s` | 0 | 0 previews for the whole dictation. Set it to, say, 10 and only the first ten seconds are previewed -- enough to see it is working -- after which finished chunks are typed once and nothing is ever deleted, with no markers. For targets that redraw slowly enough to fall behind the retyping, terminals above all. Text then arrives a chunk at a time, up to `chunking.max_chunk_s` behind your voice. |
 | `models.final_ac` | turbo | `faster-whisper-large-v3` is more accurate for ~0.5 s more per chunk. |
 
 ## How it is put together

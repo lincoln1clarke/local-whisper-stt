@@ -118,7 +118,9 @@ class TestPackagedDefaults:
     def test_shipped_config_parses_without_warnings(self):
         from lwstt.core.config import load_config
 
-        config, warnings = load_config(ROOT / "config.json")
+        # use_local=False: these are claims about the file that ships, not
+        # about whatever this machine lays over it.
+        config, warnings = load_config(ROOT / "config.json", use_local=False)
         assert warnings == [], warnings
         assert config.hotkey.keys == ["right_ctrl", "right_alt"]
         assert config.chunking.silence_gap_ms == 1000
@@ -128,8 +130,9 @@ class TestPackagedDefaults:
         """Drift between config.json and the code defaults is a silent trap."""
         from lwstt.core.config import Config, load_config
 
-        shipped, _ = load_config(ROOT / "config.json")
+        shipped, _ = load_config(ROOT / "config.json", use_local=False)
         defaults = Config()
+        assert shipped.preview == defaults.preview
         assert shipped.runtime == defaults.runtime
         assert shipped.chunking == defaults.chunking
         assert shipped.output == defaults.output

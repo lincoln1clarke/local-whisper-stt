@@ -76,6 +76,11 @@ class PreviewSection:
     # real text. 700 ms leaves room for both.
     refresh_ms: int = 700
     beam_size: int = 1
+    # 0 previews for the whole dictation. Anything higher previews only that
+    # many seconds, as proof it is working, then types finished chunks and
+    # nothing else: no markers, and no further delete-and-retype. Worth setting
+    # where the target redraws slowly enough to fall behind the retyping.
+    window_s: int = 0
 
 
 @dataclass
@@ -186,6 +191,11 @@ class Config:
         return str(expand_path(self.models.dir) / name)
 
 
+# Values where zero is meaningful but a negative is not.
+_NON_NEGATIVE_INT_FIELDS = {
+    ("preview", "window_s"),
+}
+
 # Values that must be positive to make any sense.
 _POSITIVE_INT_FIELDS = {
     ("hotkey", "hold_threshold_ms"),
@@ -267,6 +277,10 @@ def _apply_section(section: Any, data: Any, name: str, warnings: list[str]) -> N
             if coerced <= 0:
                 warnings.append(f"{path}: must be greater than 0, got {coerced}; using {default!r}")
                 coerced = default
+        if (name, key) in _NON_NEGATIVE_INT_FIELDS and isinstance(coerced, (int, float)):
+            if coerced < 0:
+                warnings.append(f"{path}: must not be negative, got {coerced}; using {default!r}")
+                coerced = default
         setattr(section, key, coerced)
 
 
@@ -289,17 +303,64 @@ def config_from_dict(data: Any) -> tuple[Config, list[str]]:
     return cfg, warnings
 
 
-def load_config(path: str | Path) -> tuple[Config, list[str]]:
-    """Load config from disk. Missing or broken files yield defaults + warnings."""
-    p = Path(path)
-    if not p.exists():
-        return Config(), [f"{p}: not found; using defaults"]
+def _read_json(p: Path) -> tuple[Any, str | None]:
+    """Parse a JSON file, returning (data, None) or (None, why it failed)."""
     try:
         raw = p.read_text(encoding="utf-8")
     except OSError as exc:
-        return Config(), [f"{p}: could not be read ({exc}); using defaults"]
+        return None, f"{p}: could not be read ({exc})"
     try:
-        data = json.loads(raw)
+        return json.loads(raw), None
     except json.JSONDecodeError as exc:
-        return Config(), [f"{p}: invalid JSON at line {exc.lineno} ({exc.msg}); using defaults"]
-    return config_from_dict(data)
+        return None, f"{p}: invalid JSON at line {exc.lineno} ({exc.msg})"
+
+
+def _overlay(base: Any, local: dict) -> Any:
+    """Lay ``local`` over ``base`` one setting at a time.
+
+    Merged per setting rather than per section, so a local file that changes
+    one number does not have to restate -- and then silently pin -- every other
+    setting beside it.
+    """
+    if not isinstance(base, dict):
+        return base
+    merged = dict(base)
+    for key, value in local.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_config(path: str | Path, use_local: bool = True) -> tuple[Config, list[str]]:
+    """Load config from disk. Missing or broken files yield defaults + warnings.
+
+    A "<name>.local.json" beside the file is laid over it, much as the word
+    lists work: settings that only suit one machine stay out of version
+    control. A broken local file is ignored and the main file still applies.
+    ``use_local=False`` reads the file exactly as shipped.
+    """
+    p = Path(path)
+    warnings: list[str] = []
+    data: Any = {}
+    if not p.exists():
+        warnings.append(f"{p}: not found; using defaults")
+    else:
+        data, problem = _read_json(p)
+        if problem:
+            warnings.append(f"{problem}; using defaults")
+            data = {}
+
+    local = p.with_name(f"{p.stem}.local{p.suffix}")
+    if use_local and local.exists():
+        local_data, problem = _read_json(local)
+        if problem:
+            warnings.append(f"{problem}; ignored")
+        elif not isinstance(local_data, dict):
+            warnings.append(f"{local}: expected an object; ignored")
+        else:
+            data = _overlay(data, local_data)
+
+    cfg, found = config_from_dict(data)
+    return cfg, warnings + found

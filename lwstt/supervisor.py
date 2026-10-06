@@ -103,6 +103,7 @@ class Supervisor:
                 "enabled": c.preview.enabled,
                 "refresh_ms": c.preview.refresh_ms,
                 "beam_size": c.preview.beam_size,
+                "window_s": c.preview.window_s,
             },
             "final": {
                 "beam_size": c.final.beam_size,
@@ -266,7 +267,8 @@ class Supervisor:
             elif msg is Msg.COMMIT:
                 text = obj.get("text", "")
                 if text:
-                    self._emit(lambda: self.typing.commit(text))
+                    keep = not self._previews_over()
+                    self._emit(lambda: self.typing.commit(text, keep_listening=keep))
                     if self.config.feedback.beep_on_commit:
                         beep(*COMMIT_TONE)
                 else:
@@ -278,6 +280,31 @@ class Supervisor:
                 if self.config.feedback.beep_on_error:
                     beep(*ERROR_TONE)
 
+    def _previews_over(self) -> bool:
+        """Whether this dictation has outlived ``preview.window_s``.
+
+        Past the window only finished chunks are typed. Every preview is typed,
+        backspaced and typed again as the commit, so a target that redraws
+        slowly -- a terminal, most of all -- spends its time on text that was
+        never going to stay, and falls further behind the longer the dictation
+        runs. The first seconds keep their preview: that is the proof it is
+        working at all.
+        """
+        window = self.config.preview.window_s
+        return window > 0 and time.monotonic() - self.armed_at >= window
+
+    def _retire_markers(self) -> None:
+        """Take the empty marker pair down once the preview window has closed.
+
+        A preview still on screen is left for its commit to replace: removing
+        it here would be one more delete, and would blank the only sign of life
+        while that chunk is still being spoken.
+        """
+        if not self.typing.listening or self.typing.provisional:
+            return
+        if self._previews_over():
+            self._emit(lambda: self.typing.set_listening(False))
+
     def _apply_preview(self, text: str) -> None:
         """Type a preview update, skipping churn that is not worth the flicker.
 
@@ -287,6 +314,8 @@ class Supervisor:
         so it is always applied; rewrites are rate-limited, and the commit
         corrects anything skipped.
         """
+        if self._previews_over():
+            return
         if self.typing.preview_edit(text).is_noop:
             return
         # Compare the provisional *text*, not the screen edit: growing the
@@ -521,6 +550,7 @@ class Supervisor:
                 self.worker.start_dictation(self.worker_settings())
                 if self.config.output.show_listening_markers:
                     self._emit(lambda: self.typing.set_listening(True))
+            self._retire_markers()
             data = recorder.read_available()
             if data:
                 self.worker.send_audio(data)

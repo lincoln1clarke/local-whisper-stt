@@ -490,6 +490,17 @@ find the longest common prefix, and backspace from there. Whisper previews usual
 only the last word or two, so a typical update is 3–8 backspaces rather than 60. Far less
 flicker, and far less exposure to desync.
 
+**Previews can be limited to the start of a dictation** (`preview.window_s`, off by
+default). Every preview is typed, backspaced and typed again as the commit, so each
+sentence costs roughly three times its length in keystrokes. A target that redraws
+slowly — a terminal running a TUI is the case that prompted this — cannot keep up, and
+the backlog grows for as long as the dictation runs. Past the window nothing provisional
+is typed and no markers are shown: each chunk lands once, as an append, and nothing is
+deleted again. The opening seconds keep their preview because that is the only evidence
+the thing is working. A preview still on screen when the window closes is left for its
+commit to replace rather than removed, which would be one more delete. The worker stops
+running preview passes at the same point, which also returns that GPU time to the finals.
+
 *Why `~`:* the whole scheme rests on the invariant that N characters typed equals N
 characters present, and the only mechanism that breaks it is **auto-pairing** — an editor
 inserting a character that was never typed. VS Code's default auto-close set is `{}`,

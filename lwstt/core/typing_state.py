@@ -94,12 +94,18 @@ class TypingState:
 
         return self._transition(mutate)
 
-    def commit(self, text: str) -> Edit:
-        """Finalise a chunk: drop the markers and fold it into committed text."""
+    def commit(self, text: str, keep_listening: bool = True) -> Edit:
+        """Finalise a chunk: drop the markers and fold it into committed text.
+
+        ``keep_listening=False`` also retires the empty marker pair in the same
+        edit, so it is never typed after the chunk only to be deleted again.
+        """
 
         def mutate() -> None:
             self.committed = append_chunk(self.committed, text)
             self.provisional = ""
+            if not keep_listening:
+                self.listening = False
 
         return self._transition(mutate)
 

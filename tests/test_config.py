@@ -163,6 +163,76 @@ class TestFileLoading:
             assert isinstance(c, Config)
 
 
+class TestLocalOverride:
+    """config.local.json is laid over config.json, one setting at a time."""
+
+    def write(self, tmp_path, main, local):
+        p = tmp_path / "config.json"
+        p.write_text(main, encoding="utf-8")
+        (tmp_path / "config.local.json").write_text(local, encoding="utf-8")
+        return p
+
+    def test_a_local_setting_wins(self, tmp_path):
+        p = self.write(
+            tmp_path,
+            json.dumps({"preview": {"window_s": 0}}),
+            json.dumps({"preview": {"window_s": 10}}),
+        )
+        c, warnings = load_config(p)
+        assert c.preview.window_s == 10
+        assert warnings == []
+
+    def test_the_rest_of_the_section_is_kept(self, tmp_path):
+        """Overriding one number must not reset its neighbours to defaults."""
+        p = self.write(
+            tmp_path,
+            json.dumps({"preview": {"refresh_ms": 900}, "hotkey": {"hold_threshold_ms": 300}}),
+            json.dumps({"preview": {"window_s": 10}}),
+        )
+        c, _ = load_config(p)
+        assert c.preview.refresh_ms == 900
+        assert c.hotkey.hold_threshold_ms == 300
+
+    def test_a_broken_local_file_leaves_the_main_one_in_force(self, tmp_path):
+        p = self.write(tmp_path, json.dumps({"preview": {"refresh_ms": 900}}), "{oops")
+        c, warnings = load_config(p)
+        assert c.preview.refresh_ms == 900
+        assert any("config.local.json" in w and "ignored" in w for w in warnings)
+
+    def test_a_local_file_that_is_not_an_object_is_ignored(self, tmp_path):
+        p = self.write(tmp_path, json.dumps({"preview": {"refresh_ms": 900}}), "[]")
+        c, warnings = load_config(p)
+        assert c.preview.refresh_ms == 900
+        assert any("config.local.json" in w for w in warnings)
+
+    def test_a_local_file_applies_without_a_main_one(self, tmp_path):
+        (tmp_path / "config.local.json").write_text(
+            json.dumps({"preview": {"window_s": 10}}), encoding="utf-8"
+        )
+        c, warnings = load_config(tmp_path / "config.json")
+        assert c.preview.window_s == 10
+        assert any("not found" in w for w in warnings)
+
+    def test_it_can_be_left_out(self, tmp_path):
+        p = self.write(tmp_path, "{}", json.dumps({"preview": {"window_s": 10}}))
+        assert load_config(p, use_local=False)[0].preview.window_s == 0
+
+
+class TestPreviewWindow:
+    def test_off_by_default(self):
+        assert Config().preview.window_s == 0
+
+    def test_zero_is_accepted(self):
+        c, warnings = cfg({"preview": {"window_s": 0}})
+        assert c.preview.window_s == 0
+        assert warnings == []
+
+    def test_a_negative_window_falls_back(self):
+        c, warnings = cfg({"preview": {"window_s": -5}})
+        assert c.preview.window_s == 0
+        assert any("window_s" in w for w in warnings)
+
+
 class TestPowerStateAccessors:
     def test_final_model_switches_on_power(self):
         c, _ = cfg({"models": {"final_ac": "big", "final_battery": "small"}})

@@ -12,7 +12,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from lwstt.core.diff import apply_edit
+from lwstt.core.diff import Edit, apply_edit
 from lwstt.core.typing_state import TypingState
 
 
@@ -353,3 +353,20 @@ class TestSpacingBetweenCommittedAndPreview:
         screen.apply(state.set_provisional("second"))
         screen.apply(state.commit("Second sentence."))
         assert screen.text == "First sentence. Second sentence."
+
+
+class TestCommitRetiringTheMarkers:
+    def test_commit_keeps_the_markers_by_default(self):
+        state = TypingState()
+        state.set_listening(True)
+        state.commit("One.")
+        assert state.on_screen() == " One. ~~"
+
+    def test_commit_can_retire_them_in_the_same_edit(self):
+        state = TypingState()
+        state.set_listening(True)
+        before = state.on_screen()
+        edit = state.commit("One.", keep_listening=False)
+        assert apply_edit(before, edit) == " One."
+        assert state.on_screen() == " One."
+        assert state.commit("Two.", keep_listening=False) == Edit(0, " Two.")

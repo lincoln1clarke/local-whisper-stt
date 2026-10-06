@@ -141,8 +141,8 @@ this to users; keep the two in step.
 ## Tests
 
 ```
-.venv\Scripts\python -m pytest tests\ -q            # 432 fast, no GPU
-.venv\Scripts\python -m pytest tests\ -q -m slow    # 32, real models on the GPU
+.venv\Scripts\python -m pytest tests\ -q            # 455 fast, no GPU
+.venv\Scripts\python -m pytest tests\ -q -m slow    # 33, real models on the GPU
 ```
 
 Slow tests spawn real worker subprocesses and load both models from disk; they

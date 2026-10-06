@@ -454,6 +454,87 @@ class TestFlashReduction:
         assert "The car sat." in sup.typing.on_screen()
 
 
+class TestPreviewWindow:
+    """With preview.window_s set, previews stop after the opening seconds and
+    only finished chunks are typed -- nothing is deleted from then on."""
+
+    def start(self, sup, window=10, elapsed=0.0):
+        sup.config.preview.window_s = window
+        sup.config.hotkey.hold_threshold_ms = 0
+        sup._arm()
+        sup._pump_once()
+        sup.armed_at -= elapsed
+
+    def test_previews_are_typed_inside_the_window(self, sup):
+        self.start(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typing.on_screen() == " ~hello~"
+
+    def test_previews_are_dropped_after_the_window(self, sup):
+        self.start(sup, elapsed=11)
+        sup._pump_once()
+        sup.typed.clear()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typed == []
+
+    def test_the_empty_markers_come_down_when_the_window_closes(self, sup):
+        self.start(sup)
+        assert sup.typing.on_screen() == " ~~"
+        sup.armed_at -= 11
+        sup._pump_once()
+        assert sup.typing.on_screen() == ""
+
+    def test_a_preview_on_screen_waits_for_its_commit(self, sup):
+        """Removing it at the deadline would be one more delete, and would
+        blank the screen while the chunk is still being spoken."""
+        self.start(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "helo"})
+        sup.armed_at -= 11
+        sup.typed.clear()
+        sup._pump_once()
+        assert sup.typed == []
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "Hello."})
+        assert sup.typing.on_screen() == " Hello."
+
+    def test_nothing_is_deleted_once_the_window_has_closed(self, sup):
+        self.start(sup)
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "one"})
+        sup.armed_at -= 11
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "One."})
+        sup.typed.clear()
+        for text in ("Two.", "Three."):
+            sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": text.lower()})
+            sup._pump_once()
+            sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": text})
+        sup._disarm()
+        sup._on_worker_message(Msg.DONE, {"session": sup.session})
+        assert sup.typed == [Edit(0, " Two."), Edit(0, " Three.")]
+
+    def test_a_commit_inside_the_window_keeps_the_markers(self, sup):
+        self.start(sup)
+        sup._on_worker_message(Msg.COMMIT, {"session": sup.session, "text": "One."})
+        assert sup.typing.on_screen() == " One. ~~"
+
+    def test_zero_previews_for_the_whole_dictation(self, sup):
+        self.start(sup, window=0, elapsed=3600)
+        sup._pump_once()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typing.on_screen() == " ~hello~"
+
+    def test_the_window_restarts_with_each_dictation(self, sup):
+        self.start(sup, elapsed=11)
+        sup._disarm()
+        sup._on_worker_message(Msg.DONE, {"session": sup.session})
+        sup._arm()
+        sup._pump_once()
+        sup._on_worker_message(Msg.PREVIEW, {"session": sup.session, "text": "hello"})
+        assert sup.typing.on_screen() == " ~hello~"
+
+    def test_the_worker_is_told_the_window(self, sup):
+        sup.config.preview.window_s = 10
+        assert sup.worker_settings()["preview"]["window_s"] == 10
+
+
 class TestTransientFocusLoss:
     """Windows reports no foreground window at all during app switching, while
     a menu opens, or as one window is torn down before the next is raised.

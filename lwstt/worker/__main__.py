@@ -174,6 +174,13 @@ class Worker:
         preview_cfg = self.settings.get("preview", {})
         if not preview_cfg.get("enabled", True):
             return
+        # Past the window the supervisor would only throw the result away, and
+        # the pass would still have cost the finals ~0.3 s of GPU. Measured in
+        # audio received rather than on a clock, so a replayed recording
+        # behaves the same at any speed.
+        window = preview_cfg.get("window_s", 0)
+        if window and self.seconds(self.all_pcm) >= window:
+            return
         now = time.monotonic()
         if (now - self.last_preview) * 1000 < preview_cfg.get("refresh_ms", 400):
             return
